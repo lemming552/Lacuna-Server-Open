@@ -471,6 +471,8 @@ sub is_available {
                 }
             }
         }
+        elsif ($task eq 'Prisoner Transport') {
+        }
         $self->task('Idle');
         $self->update;
         return 1;
@@ -806,6 +808,14 @@ sub run_political_propaganda {
     my $self = shift;
     my $mission_skill = 'politics_xp';
     my $oratory = int( ($self->defense + $self->$mission_skill)/500 + 0.5);;
+
+    if ($oratory < 1) {
+        return { result => 'Failure',
+                 reason => random_element(['I have no idea what you mean.',
+                                           'Gabba Gabba Hey!',
+                                           'They\'re laughing at me!',
+                                           'I have morale objections.']) };
+    }
 
     my $sboost = $self->on_body->spy_happy_boost;
     $sboost += $oratory;
@@ -2173,7 +2183,11 @@ sub abduct_operative {
         direction   => 'in',
         payload     => { spies => [ $self->id ], prisoners => [$defender->id] }
     );
-    $defender->send($self->from_body_id, DateTime->now->add(days => 7), 'Prisoner Transport');
+    $defender->available_on(DateTime->now->add(days => 7));
+    $defender->on_body_id($self->from_body_id);
+    $defender->task("Prisoner Transport");
+    $defender->started_assignment(DateTime->now);
+
     $self->send($self->from_body_id, $ship->date_available);
     $defender->empire->send_predefined_message(
         tags        => ['Spies','Alert'],
