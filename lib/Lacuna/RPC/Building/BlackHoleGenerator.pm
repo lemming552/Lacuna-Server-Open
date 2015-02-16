@@ -267,7 +267,15 @@ sub get_actions_for {
         $task->{reason}  = $chance->{reason};
         $task->{success} = $chance->{success};
         $task->{throw}   = $chance->{throw};
-        $task->{essentia_cost} = $chance->{essentia_cost};
+#Temp Neutral zone cheap
+        if ($target->in_neutral_area) {
+            $task->{recovery} = 60;
+            $task->{essentia_cost} = 0;
+        }
+        else {
+            $task->{essentia_cost} = $chance->{essentia_cost};
+        }
+#Temp Neutral zone cheap
         for my $mod ("waste_cost", "recovery", "side_chance") {
             if (defined($chance->{$mod})) {
                 $task->{$mod} = $chance->{$mod};
@@ -305,6 +313,19 @@ sub task_chance {
     if ($return->{throw} > 0) {
         return $return;
     }
+#Temporary Restriction v
+    if ($task->{name} eq 'Jump Zone' or
+        $task->{name} eq 'Swap Places' or
+        $task->{name} eq 'Move System') {
+        my $szone = $body->zone;
+        my $tzone = $target->zone;
+        if ($szone eq '-3|0' and $tzone ne '-3|0') {
+            $return->{throw} = 1009;
+            $return->{reason} = "The Neutral zone is a one way destination currently.";
+            return $return;
+        }
+    }
+#Temporary Restriction ^
     if ($task->{name} eq 'Jump Zone' or
         $task->{name} eq 'Swap Places' or
         $task->{name} eq 'Move System') {
@@ -471,6 +492,30 @@ sub check_neutral_violation {
             return $throw, $reason;
         }
     }
+# Additional check since we can't have empires coming out of NZ for now.
+    if ($target_in) {
+        if ($task->{name} eq "Jump Zone" or $task->{name} eq "Swap Places") {
+            if ( $target->empire_id ) {
+                $throw = 1009;
+                $reason = "The Neutral zone is a one way destination currently.";
+                return $throw, $reason;
+            }
+        }
+        elsif ($task->{name} eq "Move System") {
+            my $bodies = Lacuna->db->resultset('Map::Body')->search({star_id => [ $test_body->star_id ]});
+            my $fail = 0;
+            while (my $obody = $bodies->next) {
+                next unless (defined($obody->empire));
+                $throw = 1009;
+                $reason = "The Neutral zone is a one way destination currently.";
+                $fail = 1;
+            }
+            if ($fail) {
+                return $throw, $reason;
+            }
+        }
+    }
+#Temp check to keep people in NZ
     return 0;
 }
 
