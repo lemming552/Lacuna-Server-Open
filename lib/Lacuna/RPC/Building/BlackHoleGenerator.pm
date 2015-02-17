@@ -268,13 +268,13 @@ sub get_actions_for {
         $task->{success} = $chance->{success};
         $task->{throw}   = $chance->{throw};
 #Temp Neutral zone cheap
-        if ($target->in_neutral_area) {
-            $task->{recovery} = 60;
-            $task->{essentia_cost} = 0;
-        }
-        else {
-            $task->{essentia_cost} = $chance->{essentia_cost};
-        }
+    if ($target->in_neutral_area) {
+        $task->{recovery} = 60;
+        $task->{essentia_cost} = 0;
+    }
+    else {
+        $task->{essentia_cost} = $chance->{essentia_cost};
+    }
 #Temp Neutral zone cheap
         for my $mod ("waste_cost", "recovery", "side_chance") {
             if (defined($chance->{$mod})) {
@@ -317,9 +317,7 @@ sub task_chance {
     if ($task->{name} eq 'Jump Zone' or
         $task->{name} eq 'Swap Places' or
         $task->{name} eq 'Move System') {
-        my $szone = $body->zone;
-        my $tzone = $target->zone;
-        if ($szone eq '-3|0' and $tzone ne '-3|0') {
+        if ($body->in_neutral_area and !$target->in_neutral_area) {
             $return->{throw} = 1009;
             $return->{reason} = "The Neutral zone is a one way destination currently.";
             return $return;
@@ -343,7 +341,7 @@ sub task_chance {
         $return->{reason}  = $task->{reason};
         return $return;
     }
-    unless ($building->effective_level >= $task->{min_level}) {
+    unless ($building->level >= $task->{min_level}) {
         $return->{throw}  = 1013;
         $return->{reason} = sprintf(
             "You need a Level %d Black Hole Generator to do that",
@@ -386,6 +384,10 @@ sub task_chance {
         $return->{recovery}    = $bhg_param->{recovery}    if ($bhg_param->{recovery});
         $return->{side_chance} = $bhg_param->{side_chance} if ($bhg_param->{side_chance});
         $return->{success}     = $bhg_param->{success}     if ($bhg_param->{success});
+    }
+    if ($target->in_neutral_area) {
+        $return->{recovery} = 60;
+        $return->{essentia_cost} = 0;
     }
     unless ($building->body->waste_stored >= $task->{waste_cost}) {
         $return->{throw}  = 1011;
@@ -652,6 +654,10 @@ sub generate_singularity {
             $task->{$mod} = $chance->{$mod};
         }
     }
+    if ($target->in_neutral_area) {
+        $chance->{recovery} = 60;
+        $chance->{essentia_cost} = 0;
+    }
     if ($subsidize) {
         if ($empire->essentia < $chance->{essentia_cost}) {
             confess [1011, "Not enough essentia."];
@@ -835,7 +841,7 @@ sub generate_singularity {
         my $defense = 0;
         my $hq = $body->get_building_of_class('Lacuna::DB::Result::Building::Security');
         if (defined $hq) {
-            $defense = $hq->effective_level * $hq->effective_efficiency;
+            $defense = $hq->level * $hq->efficiency;
         }
         my $breakthru = int(($power - $defense + $lock_down->luck)/100 + 0.5)+50;
         $breakthru = 5 if $breakthru < 5;
@@ -1540,7 +1546,7 @@ sub bhg_make_asteroid {
     my @fissures = $body->get_buildings_of_class('Lacuna::DB::Result::Building::Permanent::Fissure');
     my @to_demolish = @{$body->building_cache};
     $body->delete_buildings(\@to_demolish);
-    my $new_size = int($building->effective_level/5);
+    my $new_size = int($building->level/5);
     $new_size = 10 if $new_size > 10;
     $body->update({
         class                     => 'Lacuna::DB::Result::Map::Body::Asteroid::A'.randint(1,Lacuna::DB::Result::Map::Body->asteroid_types),
@@ -1885,16 +1891,16 @@ sub bhg_decor {
     );
     my $plant; my $max_level;
     if ($variance == -1) {
-        $plant = randint(1, int($building->effective_level/10)+1);
+        $plant = randint(1, int($building->level/10)+1);
         $max_level = 3;
     }
     elsif ($variance == 0) {
-        $plant = randint(1, int($building->effective_level/5)+1);
+        $plant = randint(1, int($building->level/5)+1);
         $max_level = int($building->level/5);
     }
     else {
-        $plant = randint(1, int($building->effective_level/3)+1);
-        $max_level = $building->effective_level;
+        $plant = randint(1, int($building->level/3)+1);
+        $max_level = $building->level;
     }
     $max_level = 30 if $max_level > 30;
     my $planted = 0;
@@ -2129,7 +2135,7 @@ sub bhg_size {
     my $btype = $body->get_type;
     if ($btype eq 'asteroid') {
         if ($variance == -1) {
-            $current_size -= randint(1, int($building->effective_level/10)+1);
+            $current_size -= randint(1, int($building->level/10)+1);
             $current_size = 1 if ($current_size < 1);
         }
         elsif ($variance == 1) {
@@ -2138,7 +2144,7 @@ sub bhg_size {
                 $current_size = 20 if ($current_size > 20);
             }
             else {
-                $current_size += int($building->effective_level/5);
+                $current_size += int($building->level/5);
                 $current_size = 10 if ($current_size > 10);
             }
         }
@@ -2153,7 +2159,7 @@ sub bhg_size {
     }
     elsif ($btype eq 'habitable planet') {
         if ($variance == -1) {
-            $current_size -= randint(1,$building->effective_level);
+            $current_size -= randint(1,$building->level);
             $current_size = 30 if ($current_size < 30);
         }
         elsif ($variance == 1) {
@@ -2162,7 +2168,7 @@ sub bhg_size {
                 $current_size = 75 if ($current_size > 75);
             }
             else {
-                $current_size += $building->effective_level;
+                $current_size += $building->level;
                 $current_size = 70 if ($current_size > 70);
             }
         }
@@ -2209,7 +2215,7 @@ sub bhg_size {
 sub bhg_tasks {
     my ($building) = @_;
     my $day_sec = 60 * 60 * 24;
-    my $blevel = $building->effective_level == 0 ? 1 : $building->effective_level;
+    my $blevel = $building->level == 0 ? 1 : $building->level;
     my $map_size = Lacuna->config->get('map_size');
     my $max_dist = sprintf "%0.2f",
         sqrt(($map_size->{x}[0] - $map_size->{x}[1])**2 + ($map_size->{y}[0] - $map_size->{y}[1])**2);
@@ -2225,7 +2231,7 @@ sub bhg_tasks {
             range        => 15 * $blevel,
             recovery     => int($day_sec * 90/$blevel),
             waste_cost   => 50_000_000,
-            base_fail    => 40 - $building->effective_level, # 10% - 40%
+            base_fail    => 40 - $building->level, # 10% - 40%
             side_chance  => 25,
             subsidy_mult => .75,
         },
