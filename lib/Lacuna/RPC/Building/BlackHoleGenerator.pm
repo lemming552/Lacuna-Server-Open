@@ -259,6 +259,16 @@ sub get_actions_for {
     my ($target, $target_type) = $self->find_target($empire, $target_params);
     my @tasks = bhg_tasks($building);
     my @list;
+#Temp Neutral zone cheap
+    my $tcheck;
+    if (ref $target eq 'HASH') {
+        my $tstar = $target->{star};
+        $tcheck = $tstar->in_neutral_area;
+    }
+    else {
+        $tcheck = $target->in_neutral_area;
+    }
+#Temp Neutral zone cheap
     for my $task (@tasks) {
         my $chance;
         $chance = task_chance($building, $target, $target_type, $task);
@@ -268,13 +278,13 @@ sub get_actions_for {
         $task->{success} = $chance->{success};
         $task->{throw}   = $chance->{throw};
 #Temp Neutral zone cheap
-    if ($target->in_neutral_area) {
-        $task->{recovery} = 60;
-        $task->{essentia_cost} = 0;
-    }
-    else {
-        $task->{essentia_cost} = $chance->{essentia_cost};
-    }
+        if ($tcheck) {
+            $task->{recovery} = 60;
+            $task->{essentia_cost} = 0;
+        }
+        else {
+            $task->{essentia_cost} = $chance->{essentia_cost};
+        }
 #Temp Neutral zone cheap
         for my $mod ("waste_cost", "recovery", "side_chance") {
             if (defined($chance->{$mod})) {
@@ -314,10 +324,18 @@ sub task_chance {
         return $return;
     }
 #Temporary Restriction v
+    my $tcheck;
+    if (ref $target eq 'HASH') {
+        my $tstar = $target->{star};
+        $tcheck = $tstar->in_neutral_area;
+    }
+    else {
+        $tcheck = $target->in_neutral_area;
+    }
     if ($task->{name} eq 'Jump Zone' or
         $task->{name} eq 'Swap Places' or
         $task->{name} eq 'Move System') {
-        if ($body->in_neutral_area and !$target->in_neutral_area) {
+        if ($body->in_neutral_area and !$tcheck) {
             $return->{throw} = 1009;
             $return->{reason} = "The Neutral zone is a one way destination currently.";
             return $return;
@@ -385,7 +403,7 @@ sub task_chance {
         $return->{side_chance} = $bhg_param->{side_chance} if ($bhg_param->{side_chance});
         $return->{success}     = $bhg_param->{success}     if ($bhg_param->{success});
     }
-    if ($target->in_neutral_area) {
+    if ($tcheck) {
         $return->{recovery} = 60;
         $return->{essentia_cost} = 0;
     }
@@ -654,7 +672,15 @@ sub generate_singularity {
             $task->{$mod} = $chance->{$mod};
         }
     }
-    if ($target->in_neutral_area) {
+    my $tcheck;
+    if (ref $target eq 'HASH') {
+        my $tstar = $target->{star};
+        $tcheck = $tstar->in_neutral_area;
+    }
+    else {
+        $tcheck = $target->in_neutral_area;
+    }
+    if ($tcheck) {
         $chance->{recovery} = 60;
         $chance->{essentia_cost} = 0;
     }
