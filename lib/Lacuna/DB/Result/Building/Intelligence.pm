@@ -57,12 +57,12 @@ has spy_count => (
     },
 );
 
-has spies_in_training_count => (
+has spies_being_recruited_count => (
     is          => 'rw',
     lazy        => 1,
     default     => sub {
         my $self = shift;
-        return $self->get_spies->search({task=>'Training'})->count;
+        return $self->get_spies->search({task=>'Recruiting'})->count;
     },
 );
 
@@ -73,7 +73,7 @@ has latest_spy => (
         my $self = shift;
         return $self->get_spies->search(
             {
-                task            => 'Training',
+                task            => 'Recruiting',
             },
             {
                 order_by    => { -desc => 'available_on' }
@@ -124,7 +124,7 @@ has security_level => (
     },
 );
 
-has training_multiplier => (
+has recruiting_multiplier => (
     is      => 'rw',
     lazy    => 1,
     default => sub {
@@ -139,27 +139,27 @@ has training_multiplier => (
     }
 );
 
-sub training_costs {
+sub recruiting_costs {
     my $self = shift;
-    my $multiplier = $self->training_multiplier;
-    my $time_to_train = sprintf('%.0f', 2060 * $multiplier / $self->body->empire->effective_management_affinity);
+    my $multiplier = $self->recruiting_multiplier;
+    my $time_to_recruit = sprintf('%.0f', 2060 * $multiplier / $self->body->empire->effective_management_affinity);
     if ($self->body->happiness < 0) {
       my $unhappy_workers = abs($self->body->happiness)/100_000;
-      $time_to_train = int($time_to_train * $unhappy_workers);
+      $time_to_recruit = int($time_to_recruit * $unhappy_workers);
     }
-    $time_to_train = 5184000 if ($time_to_train > 5184000); # Max time per spy is 60 days
-    $time_to_train = 300 if ($time_to_train < 300); # Min time is 5 minutes
+    $time_to_recruit = 5184000 if ($time_to_recruit > 5184000); # Max time per spy is 60 days
+    $time_to_recruit = 300 if ($time_to_recruit < 300); # Min time is 5 minutes
     return {
         water   => 1100 * $multiplier,
         waste   => 40 * $multiplier,
         energy  => 100 * $multiplier,
         food    => 1000 * $multiplier,
         ore     => 10 * $multiplier,
-        time    => $time_to_train,
+        time    => $time_to_recruit,
     };
 }
 
-sub can_train_spy {
+sub can_recruit_spy {
     my ($self, $costs) = @_;
     if ($self->spy_count >= $self->max_spies) {
         confess [1009, 'You already have the maximum number of spies.'];
@@ -167,13 +167,13 @@ sub can_train_spy {
     my $body = $self->body;
     foreach my $resource (qw(water ore food energy)) {
         unless ($body->type_stored($resource) >= $costs->{$resource}) {
-            confess [1011, 'Not enough '.$resource.' to train a spy.'];
+            confess [1011, 'Not enough '.$resource.' to recruit a spy.'];
         }
     }
     return 1;
 }
 
-sub spend_resources_to_train_spy {
+sub spend_resources_to_recruit_spy {
     my ($self, $costs) = @_;
     my $body = $self->body;
     foreach my $resource (qw(water ore food energy)) {
@@ -183,21 +183,21 @@ sub spend_resources_to_train_spy {
     $body->add_waste($costs->{waste});
 }
 
-sub train_spy {
-    my ($self, $time_to_train) = @_;
+sub recruit_spy {
+    my ($self, $time_to_recruit) = @_;
     my $empire = $self->body->empire;
     if ($self->spy_count < $self->max_spies) {
-        unless ($time_to_train) {
-            $time_to_train = $self->training_costs->{time};
+        unless ($time_to_recruit) {
+            $time_to_recruit = $self->recruiting_costs->{time};
         }
         my $latest = $self->latest_spy;
         my $available_on = (defined $latest) ? $latest->available_on->clone : DateTime->now;
-        $available_on->add(seconds => $time_to_train );
+        $available_on->add(seconds => $time_to_recruit );
         my $deception = $empire->effective_deception_affinity * 50;
         my $spy = Lacuna->db->resultset('Spies')->new({
             from_body_id    => $self->body_id,
             on_body_id      => $self->body_id,
-            task            => 'Training',
+            task            => 'Recruiting',
             started_assignment  => DateTime->now,
             available_on    => $available_on,
             empire_id       => $self->body->empire_id,

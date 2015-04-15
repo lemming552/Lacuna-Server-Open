@@ -44,6 +44,7 @@ __PACKAGE__->add_columns(
     theft_xp                => { data_type => 'int', default_value => 0 },
     level                   => { data_type => 'tinyint', default_value => 0 },
     next_task               => { data_type => 'varchar', size => 30, is_nullable => 0, default_value => 'Idle' },
+    task_repeat             => { data_type => 'tinyint', default_value => 0 },
 );
 
 __PACKAGE__->belongs_to('empire', 'Lacuna::DB::Result::Empire', 'empire_id');
@@ -224,7 +225,8 @@ sub offensive_assignments {
             },
         );
     }
-    if (eval{$self->can_conduct_advanced_missions} or $self->on_body->empire_id == -4) {
+    if (eval{$self->can_conduct_advanced_missions} or $self->on_body->empire_id == -4
+            and !($self->on_body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) ) {
         push @assignments, (
             {
                 task        =>'Appropriate Technology',
@@ -232,7 +234,7 @@ sub offensive_assignments {
                 skill       => 'theft',
             },
         );    
-        if ( !($self->on_body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) and $self->on_body->happiness < 0) {
+        if ($self->on_body->happiness < 0) {
             push @assignments, (
                 {
                     task        =>'Incite Insurrection', # Non-SS
@@ -310,6 +312,11 @@ sub neutral_assignments {
     my @assignments = (
         {
             task        => 'Idle',
+            recovery    => 0,
+            skill       => 'none',
+        },
+        {
+            task        => 'Reassign',
             recovery    => 0,
             skill       => 'none',
         },
@@ -1984,12 +1991,12 @@ sub steal_planet {
     my $defender_capitol_id = $self->on_body->empire->home_planet_id;
     Lacuna->db->resultset('Spies')->search({
         on_body_id => $self->on_body_id,
-        task => { 'in' => [ 'Training',
-                                'Intel Training',
-                                'Mayhem Training',
-                                'Politics Training',
-                                'Theft Training'] },
-    })->delete_all; # All spies in training are executed including those training in intel,mayhem,politics, and theft
+        task => { 'in' => [ 'Recruiting',
+                            'Intel Training',
+                            'Mayhem Training',
+                            'Politics Training',
+                            'Theft Training'] },
+    })->delete_all; # All spies in training or being recruited are executed
 
     my $spies = Lacuna->db->resultset('Spies')
                   ->search({from_body_id => $self->on_body_id});

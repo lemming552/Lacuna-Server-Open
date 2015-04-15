@@ -40,7 +40,7 @@ sub view_spies {
         else {
             $planets{$spy->on_body_id} = $spy->on_body;
         }
-        $cost_to_subsidize++ if ($spy->task eq 'Training');
+        $cost_to_subsidize++ if ($spy->task eq 'Recruiting');
         push @spies, $spy->get_status;
     }
     my @assignments = Lacuna::DB::Result::Spies->assignments;
@@ -69,7 +69,7 @@ sub view_all_spies {
         else {
             $planets{$spy->on_body_id} = $spy->on_body;
         }
-        $cost_to_subsidize++ if ($spy->task eq 'Training');
+        $cost_to_subsidize++ if ($spy->task eq 'Recruiting');
         push @spies, $spy->get_status;
     }
     my @assignments = Lacuna::DB::Result::Spies->assignments;
@@ -99,7 +99,7 @@ sub view_all_spies {
 #         else {
 #             $planets{$spy->on_body_id} = $spy->on_body;
 #         }
-#         $cost_to_subsidize++ if ($spy->task eq 'Training');
+#         $cost_to_subsidize++ if ($spy->task eq 'Recruiting');
 #         push @spies, $spy->get_status;
 #     }
 #     my @assignments = Lacuna::DB::Result::Spies->assignments;
@@ -112,7 +112,7 @@ sub view_all_spies {
 #     };
 # }
 
-sub subsidize_training {
+sub subsidize_recruiting {
     my ($self, $session_id, $building_id) = @_;
     my $empire = $self->get_empire_by_session($session_id);
     my $building = $self->get_building($empire, $building_id);
@@ -121,7 +121,7 @@ sub subsidize_training {
     }
     my $body = $building->body;
 
-    my $spies = $building->get_spies->search({ task => 'Training' });
+    my $spies = $building->get_spies->search({ task => 'Recruiting' });
 
     my $cost = $spies->count;
     unless ($empire->essentia >= $cost) {
@@ -130,7 +130,7 @@ sub subsidize_training {
 
     $empire->spend_essentia({
         amount  => $cost, 
-        reason  => 'spy training subsidy after the fact',
+        reason  => 'spy recruitment subsidy after the fact',
     });    
     $empire->update;
 
@@ -189,29 +189,29 @@ sub burn_spy {
     };
 }
 
-sub train_spy {
+sub recruit_spy {
     my ($self, $session_id, $building_id, $quantity) = @_;
     my $empire = $self->get_empire_by_session($session_id);
     my $building = $self->get_building($empire, $building_id);
     unless ($building->efficiency == 100) {
-        confess [1010, "You can not train spies when the Intelligence Ministry is in need of repair."];
+        confess [1010, "You can not recruit spies when the Intelligence Ministry is in need of repair."];
     }
     $quantity ||= 1;
     if ($quantity > 5) {
-        confess [1009, "You can only train 5 spies at a time."];
+        confess [1009, "You can only recruit 5 spies at a time."];
     }
-    my $trained = 0;
+    my $recruited = 0;
     my $body = $building->body;
     if ($building->effective_level < 1) {
-        confess [1013, "You can't train spies until your Intelligence Ministry is completed."];
+        confess [1013, "You can't recruit spies until your Intelligence Ministry is completed."];
     }
-    my $costs = $building->training_costs;
+    my $costs = $building->recruiting_costs;
     my $reason;
     SPY: foreach my $i (1..$quantity) {
-        if (eval{$building->can_train_spy($costs)}) {
-            $building->spend_resources_to_train_spy($costs);
-            $building->train_spy($costs->{time});
-            $trained++;
+        if (eval{$building->can_recruit_spy($costs)}) {
+            $building->spend_resources_to_recruit_spy($costs);
+            $building->recruit_spy($costs->{time});
+            $recruited++;
         }
         else {
             my ( $code, $message ) = @{$@};
@@ -219,16 +219,16 @@ sub train_spy {
             last SPY;
         }
     }
-    if ($trained) {
+    if ($recruited) {
         $body->update;
-        if ($trained >= 3) {
+        if ($recruited >= 3) {
             $body->add_news(50, '%s has just approved a massive intelligence budget increase.', $empire->name);
         }
     }
     my $ret = {
         status  => $self->format_status($empire, $body),
-        trained => $trained,
-        not_trained => $quantity - $trained,
+        recruited => $recruited,
+        not_recruited => $quantity - $recruited,
         building                    => {
             work        => {
                 seconds_remaining   => $building->work_seconds_remaining,
@@ -237,7 +237,7 @@ sub train_spy {
             },
         },
     };
-    $ret->{reason_not_trained} = $reason;
+    $ret->{reason_not_recruited} = $reason;
     return $ret;
 }
 
@@ -247,10 +247,10 @@ around 'view' => sub {
     my $building = $self->get_building($empire, $building_id, skip_offline => 1);
     my $out = $orig->($self, $empire, $building);
     $out->{spies} = {
-        maximum         => $building->max_spies,
-        current         => $building->spy_count,
-        training_costs  => $building->training_costs,
-        in_training     => $building->spies_in_training_count,
+        maximum          => $building->max_spies,
+        current          => $building->spy_count,
+        recruiting_costs => $building->recruiting_costs,
+        being_recruited  => $building->spies_being_recruited_count,
     };
     return $out;
 };
@@ -274,7 +274,7 @@ sub name_spy {
     
 }
 
-__PACKAGE__->register_rpc_method_names(qw(view_spies view_all_spies assign_spy train_spy burn_spy name_spy subsidize_training));
+__PACKAGE__->register_rpc_method_names(qw(view_spies view_all_spies assign_spy recruit_spy burn_spy name_spy subsidize_recruiting));
 
 
 no Moose;

@@ -332,25 +332,25 @@ sub pod_check {
   $colony->update;
 }
 
-sub train_spies {
+sub recruit_spies {
     my ($self, $colony, $chance, $subsidise ) = @_;
-    say 'TRAIN SPIES';
+    say 'RECRUIT SPIES';
 
     my $intelligence = $colony->get_building_of_class('Lacuna::DB::Result::Building::Intelligence');
 
     return unless defined $intelligence;
 
-    my $costs = $intelligence->training_costs;
+    my $costs = $intelligence->recruiting_costs;
     my $spies = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->search({
             from_body_id => $colony->id,
         })->count;
     my $max_spies = $intelligence->level * 3;
     my $room_for  = $max_spies - $spies;
-    my $train_count = 0;
+    my $recruit_count = 0;
     if ($subsidise) {
         my $deception = $colony->empire->effective_deception_affinity * 50;
-        while ($train_count < $room_for) {
-            $train_count++;
+        while ($recruit_count < $room_for) {
+            $recruit_count++;
             next if (rand(100) < $chance);
             # bypass everything and just create the spy
             my $spy = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->new({
@@ -370,26 +370,26 @@ sub train_spies {
             ->update_level
             ->insert;
 
-            say "    Subsidised spy being trained";
+            say "    Subsidised spy being recruited";
             $spies++;
         }
     }
     else {
-        my $can_train = 1;
+        my $can_recruit = 1;
 
-        while ($can_train and $train_count < $room_for) {
-            $train_count++;
+        while ($can_recruit and $recruit_count < $room_for) {
+            $recruit_count++;
             next if (rand(100) < $chance);
-            my $can = eval{$intelligence->can_train_spy($costs)};
+            my $can = eval{$intelligence->can_recruit_spy($costs)};
             my $reason = $@;
             if ($can) {
-                $intelligence->spend_resources_to_train_spy($costs);
-                $intelligence->train_spy($costs->{time});
-                say "    Spy being trained.";
+                $intelligence->spend_resources_to_recruit_spy($costs);
+                $intelligence->recruit_spy($costs->{time});
+                say "    Spy being recruited.";
             }
             else {
                 say '    '.$reason->[1];
-                $can_train = 0;
+                $can_recruit = 0;
             }
         }
     }

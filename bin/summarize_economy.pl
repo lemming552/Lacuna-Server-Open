@@ -116,7 +116,7 @@ sub summarize {
             when (/boost/i) {
                 $today->out_boost( $today->out_boost + ($entry->amount * -1));            
             }
-            when (/spy training subsidy/i) {
+            when (/spy recruitment subsidy/i) {
                 $today->out_spy( $today->out_spy + ($entry->amount * -1));            
             }
             when (/recycling subsidy/i) {

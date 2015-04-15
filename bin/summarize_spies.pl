@@ -79,7 +79,7 @@ sub generate_overview {
                                                $spies->search({task => 'Sabotage Resource'})->count,
             stealing_count                  => $spies->search({task => 'Appropriate Technology'})->count +
                                                $spies->search({task => 'Appropriate Resources'})->count,
-            training_count                  => $spies->search({task => 'Training'})->count,
+            recruiting_count                => $spies->search({task => 'Recruiting'})->count,
             extra_training_count            => $spies->search({task => 'Intel Training'})->count +
                                                $spies->search({task => 'Mayhem Training'})->count +
                                                $spies->search({task => 'Politics Training'})->count +
