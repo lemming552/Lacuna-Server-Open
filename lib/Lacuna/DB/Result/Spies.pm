@@ -2011,9 +2011,11 @@ sub steal_planet {
     my $moved_spies = 0;
     while (my $spy = $spies->next) {
         if ($moved_spies++ < $def_room or $empire_id < 0) {
-          $spy->update({
-                        from_body_id => $defender_capitol_id,
-                       });
+          my $shash = { from_body_id => $defender_capitol_id };
+          if ($spy->task eq "Counter Espionage") {
+              $shash->{task} = "Idle";
+          }
+          $spy->update($shash);
         }
         else {
           $spy->update({
