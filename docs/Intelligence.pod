@@ -208,9 +208,7 @@ The unique id of the spy you wish to rename.
 
 The name you'd like to set for the spy. The name cannot contain @, <, #, &, ; or profanity, and must be at least 1 character long.
 
-
-
-=head2 assign_spy ( session_id, building_id, spy_id, assignment )
+=head2 assign_spy ( session_id, building_id, spy_id, assignment, nexttask)
 
 Set a spy on a new task.
 
@@ -225,6 +223,7 @@ Set a spy on a new task.
         "id" : "id-goes-here",
         "name" : "Jason Bourne",
         "assignment" : "Idle",
+        "nexttask"   : "Idle",
         "possible_assignments" : [
             {
                 "task" : "Idle",
@@ -273,10 +272,6 @@ This is provided when no immediate mission occurs. For example, if you set a spy
 
 This means a mission has occurred and came out in favor of the spy.
 
-=item Bounce
-
-This means a mission started, but was foiled and neither side won.
-
 =item Failure
 
 This means a mission occurred, but went so poorly that the defense got the upper hand and bested you.
@@ -301,7 +296,12 @@ The unique id of the spy you wish to assign.
 
 =head3 assignment
 
-A string containing the new assignment name. These are the possible assignments:
+A string containing the new assignment name. Possible assignments listed below.
+
+=head3 nexttask
+
+A string containing the assignment to run after finishing current assignment.
+Default is Idle.
 
 =over
 
@@ -412,5 +412,7 @@ Steal a planet.
 =back
 
 B<NOTE:> You can do bad things to allies using these assignments.
+
+=head2 assign_spy_nexttask ( session_id, building_id, spy_id, nexttask)
 
 =cut

@@ -147,7 +147,28 @@ sub subsidize_recruiting {
 
 
 sub assign_spy {
-    my ($self, $session_id, $building_id, $spy_id, $assignment) = @_;
+    my ($self, $session_id, $building_id, $spy_id, $assignment, $nexttask) = @_;
+    my $empire = $self->get_empire_by_session($session_id);
+    my $building = $self->get_building($empire, $building_id);
+    unless ($building->efficiency == 100) {
+        confess [1010, "You can not communicate with your spy when the Intelligence Ministry is in need of repair."];
+    }
+    $nexttask ||= "Idle";
+    $empire->current_session->check_captcha;
+    my $spy = $building->get_spy($spy_id);
+    unless (defined $spy) {
+        confess [1002, "Spy not found."];
+    }
+    my $mission = $spy->assign($assignment, $nexttask);
+    return {
+        status  => $self->format_status($empire, $building->body),
+        mission => $mission,
+        spy     => $spy->get_status,
+    };
+}
+
+sub assign_spy_nexttask {
+    my ($self, $session_id, $building_id, $spy_id, $nexttask) = @_;
     my $empire = $self->get_empire_by_session($session_id);
     my $building = $self->get_building($empire, $building_id);
     unless ($building->efficiency == 100) {
@@ -158,7 +179,7 @@ sub assign_spy {
     unless (defined $spy) {
         confess [1002, "Spy not found."];
     }
-    my $mission = $spy->assign($assignment);
+    my $mission = $spy->assign_next($nexttask);
     return {
         status  => $self->format_status($empire, $building->body),
         mission => $mission,

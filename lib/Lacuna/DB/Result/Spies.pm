@@ -466,6 +466,7 @@ sub is_available {
             my $max_points  = 350 + $train_bld->effective_level * 75;
             if ($self->$tr_skill >= $max_points) {
                 $self->task('Idle');
+#Set nexttask
                 $self->update_level;
                 $self->update;
             }
@@ -489,6 +490,7 @@ sub is_available {
                     $fskill = $max_points if ($fskill > $max_points);
                     $self->$tr_skill($fskill);
                     $self->task('Idle') if ($fskill >= $max_points);
+#Set nexttask
                     $self->started_assignment($now->clone->subtract(minutes => $remain_min)); # Put time at now with remainder
                     $self->update_level;
                     $self->update;
@@ -496,6 +498,7 @@ sub is_available {
             }
         }
         else {
+#Set nexttask
             $self->task('Idle');
             $self->update_level;
             $self->update;
@@ -575,6 +578,7 @@ sub is_available {
         elsif ($task eq 'Prisoner Transport') {
         }
         $self->task('Idle');
+#Set nexttask
         $self->update;
         return 1;
     }
@@ -637,20 +641,52 @@ my @class_failures = (
                       'Boooooring!',
                      );
 
+sub assign_next {
+    my ($self, $assignment, $nexttask) = @_;
+    my $followup = 0;
+    foreach my $possible (@{$self->get_possible_assignments}) {
+        if ($possible->{task} eq $nexttask) {
+            $followup = 1;
+        }
+    }
+    if ($followup) {
+      $self->nexttask("$nexttask");
+    }
+    else {
+      $self->nexttask("Idle");
+    }
+    my $is_available = $self->is_available;
+#return something
+# 1. nexttask is not set to option
+# 2. nexttask set, current task still running
+# 3. current task finished, nexttask immediately attempted, new next is "Idle"
+}
+
 sub assign {
-    my ($self, $assignment) = @_;
+    my ($self, $assignment, $nexttask) = @_;
 
     my $is_available = $self->is_available;
+    $nexttask ||= "Idle";
 
     # determine mission
     my $mission;
+    my $followup = 0;
     foreach my $possible (@{$self->get_possible_assignments}) {
         if ($possible->{task} eq $assignment) {
             $mission = $possible;
         }
+        if ($possible->{task} eq $nexttask) {
+            $followup = 1;
+        }
     }
     if (!$mission->{skill} || !$is_available) {
         return { result =>'Failure', reason => random_element(['I am busy just now.','It will have to wait.','Can\'t right now.','Maybe later.','Negative.']) };
+    }
+    if ($followup) {
+      $self->nexttask("$nexttask");
+    }
+    else {
+      $self->nexttask("Idle");
     }
     
     # set assignment
@@ -755,6 +791,7 @@ sub burn {
             $self->from_body_id($self->on_body_id);
             $self->empire_id($new_empire->id);
             $self->task('Idle');
+            $self->nexttask('Idle');
             $self->available_on(DateTime->now);
             $self->times_turned( $self->times_turned + 1 );
             $self->update;
@@ -1368,12 +1405,14 @@ sub turn {
                             $self->from_body->name],
         );
         $self->task('Idle');
+        $self->nexttask('Idle');
         $self->empire_id($new_home->empire_id);
         $self->from_body_id($new_home->id);
     }
     else {
         $message = { filename => 'none' };
         $self->task('Retiring');
+        $self->nexttask('Idle');
         $self->offense_mission_count(150);
         $self->defense_mission_count(150);
         $self->available_on(DateTime->now->add(days => 30));
@@ -1851,7 +1890,7 @@ sub incite_mutiny_loss {
     given (randint(1,3)) {
         when (1) { return $self->turn_defector(@_) }
         when (2) { return $self->knock_attacker_unconscious(@_) }
-        when (3) { return $self->kill_mutaneer(@_) }
+        when (3) { return $self->kill_mutineer(@_) }
     }
 }
 
@@ -2014,6 +2053,7 @@ sub steal_planet {
           my $shash = { from_body_id => $defender_capitol_id };
           if ($spy->task eq "Counter Espionage") {
               $shash->{task} = "Idle";
+              $shash->{nexttask} = "Idle";
           }
           $spy->update($shash);
         }
@@ -2428,7 +2468,7 @@ sub abduct_operative {
 #    $self->on_body->add_news(80,'The leader of the rebellion to overthrow %s was killed in a firefight today on %s.', $self->on_body->empire->name, $self->on_body->name);
 #}
 #
-sub kill_mutaneer {
+sub kill_mutineer {
     my ($self, $defender) = @_;
     return $self->get_spooked->id unless (defined $defender);
     $self->on_body
