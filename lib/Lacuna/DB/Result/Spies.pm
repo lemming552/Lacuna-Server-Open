@@ -642,11 +642,12 @@ my @class_failures = (
                      );
 
 sub assign_next {
-    my ($self, $assignment, $nexttask) = @_;
+    my ($self, $nexttask) = @_;
     my $followup = 0;
     foreach my $possible (@{$self->get_possible_assignments}) {
         if ($possible->{task} eq $nexttask) {
             $followup = 1;
+            last;
         }
     }
     if ($followup) {
@@ -654,12 +655,29 @@ sub assign_next {
     }
     else {
       $self->nexttask("Idle");
+      $nexttask = "Idle";
     }
     my $is_available = $self->is_available;
-#return something
-# 1. nexttask is not set to option
-# 2. nexttask set, current task still running
-# 3. current task finished, nexttask immediately attempted, new next is "Idle"
+    if (!$is_available or $nexttask eq "Idle") {
+        $self->update;
+        return {result => 'Accepted', reason => random_element(\@accepted_responses)};
+    }
+    my $current = $self->task;
+    if ($current eq "Intel Training" or
+        $current eq "Mayhem Training" or
+        $current eq "Politics Training" or
+        $current eq "Theft Training") {
+        $self->update;
+        return {result => 'Accepted', reason => random_element(\@accepted_responses)};
+    }
+    elsif ($current eq "Idle") {
+        return $self->assign($nexttask, "Idle");
+    }
+    else {
+        $self->nexttask("Idle");
+        $self->update;
+        return { result =>'Failure', reason => 'I have to be removed from my current assignment first.' };
+    }
 }
 
 sub assign {
@@ -702,6 +720,7 @@ sub assign {
         $self->update;
         $self->on_body->needs_recalc(1);
         $self->on_body->update;
+        $self->nexttask("Idle");
         return {result => 'Accepted', reason => random_element(\@accepted_responses)};
     }
     elsif ($assignment eq 'Intel Training') {
