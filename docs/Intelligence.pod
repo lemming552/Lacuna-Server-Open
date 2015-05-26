@@ -415,4 +415,7 @@ B<NOTE:> You can do bad things to allies using these assignments.
 
 =head2 assign_spy_nexttask ( session_id, building_id, spy_id, nexttask)
 
+Assigns the task to perform after completing current task.
+Returns same block as assign_spy
+
 =cut
