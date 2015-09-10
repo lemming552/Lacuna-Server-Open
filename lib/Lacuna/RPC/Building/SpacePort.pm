@@ -305,7 +305,8 @@ sub send_ship_types {
     my $ship_ref;
     my $do_captcha_check = 0;
     my $ag_chk = 0;
-    my @ag_list = ("sweeper","snark","snark2","snark3",
+    my @ag_list = ("placebo","placebo2","placebo3","placebo4","placebo5","placebo6",
+                   "sweeper","snark","snark2","snark3",
                    "observatory_seeker","spaceport_seeker","security_ministry_seeker",
                    "scanner","surveyor","detonator","bleeder","thud",
                    "scow","scow_large","scow_fast","scow_mega");

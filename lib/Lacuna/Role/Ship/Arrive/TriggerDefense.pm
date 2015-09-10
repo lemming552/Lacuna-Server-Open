@@ -8,6 +8,9 @@ use Lacuna::Util qw(commify randint);
 after handle_arrival_procedures => sub {
     my ($self) = @_;
 
+    # Strip placebo
+    $self->strip_placebo;
+
     # no defense at stars
     return unless $self->foreign_body_id;
 
@@ -89,6 +92,26 @@ sub citadel_interaction {
     }
     return ($max_mult * $combat_def);
 
+}
+
+sub strip_placebo {
+    my ($self) = @_;
+    return if $self->type ne "attack_group";
+    my $payload = $self->payload;
+    my @placebo = ("placebo","placebo2","placebo3","placebo4","placebo5","placebo6");
+    my %del_keys;
+    for my $key (sort keys %{$payload->{fleet}}) {
+        my ($sort_val, $type, $combat, $speed, $stealth, $hold_size) = split(/:/, $key);
+        if (grep { $type eq $_ } @placebo) {
+            $del_keys{"$key"} = 1;
+        }
+    }
+    for my $key (keys %del_keys) {
+        delete $payload->{fleet}->{"$key"};
+    }
+    $self->payload($payload);
+    $self->update;
+    return;
 }
 
 sub damage_in_combat {
