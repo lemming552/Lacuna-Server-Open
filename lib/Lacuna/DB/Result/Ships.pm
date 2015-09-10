@@ -438,7 +438,8 @@ sub send {
     }
     $self->update;
 
-    my @ag_list = ("sweeper","snark","snark2","snark3",
+    my @ag_list = ("placebo","placebo2","placebo3","placebo4","placebo5","placebo6",
+                   "sweeper","snark","snark2","snark3",
                    "observatory_seeker","spaceport_seeker","security_ministry_seeker",
                    "scanner","surveyor","detonator","bleeder","thud",
                    "scow","scow_large","scow_fast","scow_mega", "attack_group");
@@ -575,8 +576,10 @@ sub send {
         $self->name("Attack Group Ship");
         $self->speed($attack_group->{speed});
         $self->combat($attack_group->{combat});
+# Here's where we mess with placebo stuff
         $self->stealth($attack_group->{stealth});
         $self->payload($payload);
+# payload changes
         $self->hold_size($attack_group->{hold_size});
         $self->number_of_docks($attack_group->{number_of_docks});
         $self->berth_level(1);
