@@ -42,6 +42,7 @@ __PACKAGE__->add_columns(
     fleet_speed             => { data_type => 'int', is_nullable => 0 },
     berth_level             => { data_type => 'int', is_nullable => 0 },
     number_of_docks         => { data_type => 'int', is_nullable => 1 },
+    views                   => { data_type => 'mediumblob', is_nullable => 1, 'serializer_class' => 'JSON' },
 );
 __PACKAGE__->typecast_map(type => {
     'attack_group'                          => 'Lacuna::DB::Result::Ships::AttackGroup', #attack ships combined into one group.
