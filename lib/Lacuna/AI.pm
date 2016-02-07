@@ -115,6 +115,7 @@ sub build_colony {
         }
     }
     
+    my $plot_use = 0;
     my $buildings = Lacuna->db->resultset('Lacuna::DB::Result::Building');
     foreach my $plan (@plans) {
         my ($x, $y) = $body->find_free_space;
@@ -129,6 +130,11 @@ sub build_colony {
         say $building->name;
         $body->build_building($building);
         $building->finish_upgrade;
+        $plot_use++ unless $plan =~ /::Permanent::/;
+    }
+    if ($plot_use > $body->size) {
+        $body->size($plot_use);
+        $body->update;
     }
 }
 
@@ -353,16 +359,19 @@ sub train_spies {
     my $max_spies = $intelligence->level * 3;
     my $room_for  = $max_spies - $spies;
     my $train_count = 0;
+    say " Training $room_for spies for total of $max_spies with chance of $chance";
     if ($subsidise) {
+        say " Subsidizing";
         my $deception = $colony->empire->effective_deception_affinity * 50;
         while ($train_count < $room_for) {
             $train_count++;
-            next if (rand(100) < $chance);
+            next if ($chance < rand(100));
             # bypass everything and just create the spy
             my $spy = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->new({
                 from_body_id    => $colony->id,
                 on_body_id      => $colony->id,
                 task            => 'Idle',
+                date_created    => DateTime->now,
                 started_assignment  => DateTime->now,
                 available_on    => DateTime->now,
                 empire_id       => $colony->empire_id,
@@ -385,7 +394,7 @@ sub train_spies {
 
         while ($can_train and $train_count < $room_for) {
             $train_count++;
-            next if (rand(100) < $chance);
+            next if ($chance < rand(100));
             my $can = eval{$intelligence->can_train_spy($costs)};
             my $reason = $@;
             if ($can) {
@@ -494,20 +503,22 @@ sub build_ships_max {
 sub set_defenders {
     my ($self, $colony) = @_;
     say 'SET DEFENDERS';
-    my $local_spies = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->search({from_body_id => $colony->id, on_body_id => $colony->id});
-    my $on_sweep = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->search({from_body_id => $colony->id, on_body_id => $colony->id, task => "Security Sweep"})->count;
+    my $local_spies = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->search({empire_id => $colony->empire_id, on_body_id => $colony->id});
+    my $on_sweep = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->search({empire_id => $colony->empire_id, on_body_id => $colony->id, task => "Security Sweep"})->count;
     my $enemies = Lacuna->db->resultset('Lacuna::DB::Result::Spies')->search({on_body_id => $colony->id, task => { '!=' => 'Captured'}, empire_id => { '!=' => $self->empire_id }})->count;
     $on_sweep = 10 if ($enemies == 0);
     while (my $spy = $local_spies->next) {
         if ($spy->is_available) {
-            if ($spy->task eq 'Security Sweep' or $on_sweep < 10) {
+            if ( $spy->date_created < DateTime->now->subtract(hours => 8) and
+                ($spy->task eq 'Security Sweep' or $on_sweep < 10)) {
+
                 say "    Spy ID: ".$spy->id." sweeping";
                 my $spy_result = $spy->assign('Security Sweep');
                 $spy->update;
                 if ($spy_result->{message_id}) {
                     my $message = Lacuna->db->resultset('Lacuna::DB::Result::Message')->find($spy_result->{message_id});
                     say "message: ".$message->subject;
-                    if ($message && $message->subject eq "Spy Report") {
+                    if ($message && $message->subject =~ /^Spy Report/) {
                         $on_sweep += 10; #No spies to find
                         say "        spy report, no more sweeps.";
                     }

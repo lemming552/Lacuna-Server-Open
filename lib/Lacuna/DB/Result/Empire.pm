@@ -14,7 +14,7 @@ use Email::Stuff;
 use Email::Valid;
 use UUID::Tiny ':std';
 use Lacuna::Constants qw(INFLATION);
-
+use PerlX::Maybe qw(provided maybe);
 
 __PACKAGE__->table('empire');
 __PACKAGE__->add_columns(
@@ -87,7 +87,6 @@ __PACKAGE__->add_columns(
     skip_excavator_destroyed => { data_type => 'tinyint', default_value => 0 },
     skip_excavator_replace_msg => { data_type => 'tinyint', default_value => 0 },
     dont_replace_excavator  => { data_type => 'tinyint', default_value => 0 },
-    has_new_messages        => { data_type => 'int', size => 11, default_value => 0 },
     latest_message_id       => { data_type => 'int',  is_nullable => 1 },
     skip_incoming_ships     => { data_type => 'tinyint', default_value => 0 },
     chat_admin              => { data_type => 'int', default_value => 0 },
@@ -96,6 +95,10 @@ __PACKAGE__->add_columns(
     outlaw                  => { data_type => 'tinyint', default_value => 0 },
     outlaw_date             => { data_type => 'datetime', is_nullable => 0, default_value => "2010-10-03 18:17:26" },
 );
+
+# tell DBIC that this is unique so it can be sorted properly when dealing
+# with has_many, prefetch, and order_by
+__PACKAGE__->add_unique_constraint(name => ['name']);
 
 sub sqlt_deploy_hook {
     my ($self, $sqlt_table) = @_;
@@ -120,6 +123,52 @@ __PACKAGE__->has_many('received_messages',  'Lacuna::DB::Result::Message',      
 __PACKAGE__->has_many('medals',             'Lacuna::DB::Result::Medals',       'empire_id');
 __PACKAGE__->has_many('all_probes',         'Lacuna::DB::Result::Probes',       'empire_id');
 __PACKAGE__->has_many('bodies',             'Lacuna::DB::Result::Map::Body',    'empire_id');
+
+has has_new_messages => (
+                         is => 'ro',
+                         isa => 'Int',
+                         lazy_build => 1,
+                        );
+
+sub _build_has_new_messages {
+    my ($self) = @_;
+    $self->received_messages->search({has_read => 0})->count;
+}
+
+# I'm the sitter for these babies.
+__PACKAGE__->has_many('allbabyauths', 'Lacuna::DB::Result::SitterAuths', 'sitter_id');
+__PACKAGE__->has_many('babyauths',    'Lacuna::DB::Result::SitterAuths', sub {
+                            my $args = shift;
+                            return (
+                                    {
+                                        "$args->{foreign_alias}.sitter_id" => { -ident => "$args->{self_alias}.id" },
+                                        "$args->{foreign_alias}.expiry"    => { '>=' => \q[UTC_TIMESTAMP()] },
+                                    },
+                                    $args->{self_rowobj} && {
+                                        "$args->{foreign_alias}.sitter_id" => $args->{self_rowobj}->id,
+                                        "$args->{foreign_alias}.expiry"    => { '>=' => \q[UTC_TIMESTAMP()] },
+                                    }
+                                   );
+                        });
+
+# I'm the baby for these sitters.
+__PACKAGE__->has_many('allsitterauths', 'Lacuna::DB::Result::SitterAuths', 'baby_id');
+__PACKAGE__->has_many('sitterauths',    'Lacuna::DB::Result::SitterAuths', sub {
+                            my $args = shift;
+                            return (
+                                    {
+                                        "$args->{foreign_alias}.baby_id" => { -ident => "$args->{self_alias}.id" },
+                                        "$args->{foreign_alias}.expiry"    => { '>=' => \q[UTC_TIMESTAMP()] },
+                                    },
+                                    $args->{self_rowobj} && {
+                                        "$args->{foreign_alias}.baby_id" => $args->{self_rowobj}->id,
+                                        "$args->{foreign_alias}.expiry"    => { '>=' => \q[UTC_TIMESTAMP()] },
+                                    }
+                                   );
+                        });
+
+__PACKAGE__->many_to_many('babies', 'babyauths', 'baby');
+__PACKAGE__->many_to_many('sitters', 'sitterauths', 'sitter');
 
 for my $affin (qw(
     manufacturing_affinity
@@ -167,7 +216,22 @@ for my $affin (qw(
     };
 }
 
+has is_active => (
+                  is  => 'ro',
+                  isa => 'Bool',
+                  lazy_build => 1,
+                 );
 
+sub _build_is_active {
+    my ($self) = @_;
+    Lacuna->cache->get('empire_active', $self->id);
+}
+
+sub set_active {
+    my ($self) = @_;
+    Lacuna->cache->set('empire_active', $self->id, 1, 30 * 60);
+    $self->clear_is_active;
+}
 
 sub observatory_probes {
     my ($self,$args) = @_;
@@ -439,8 +503,9 @@ sub _adjust_essentia {
 sub recalc_messages {
     my ($self) = @_;
 
+    # probably don't have to clear it, but shouldn't really hurt, either.
+    $self->clear_has_new_messages;
     $self->update({
-        has_new_messages    => $self->get_new_message_count,
         latest_message_id   => $self->get_latest_message_id,
     });
 }
@@ -470,14 +535,15 @@ sub get_latest_message_id {
 }
 
 # The number of times a RPC has been made to this empire
-has rpc_count => (
-    is      => 'ro',
-    lazy    => 1,
-    default => sub {
-        my $self = shift;
-        return Lacuna->cache->increment('rpc_count_'.format_date(undef,'%d'), $self->id, 1, 60 * 60 * 30);
-    }
-);
+sub rpc_count {
+    my $self = shift;
+    Lacuna->cache->get('rpc_count_'.format_date(undef,'%d'), $self->id);
+}
+
+sub inc_rpc_count {
+    my $self = shift;
+    return Lacuna->cache->increment('rpc_count_'.format_date(undef,'%d'), $self->id, 1, 60 * 60 * 30);
+}
 
 # Reseting the RPC count for an empire should be done only under dire
 # circumstances, or for testing purposes.  In that case, this can
@@ -518,48 +584,115 @@ has rpc_rate => (
 
 sub get_status {
     my ($self) = @_;
-    my $planet_rs = $self->planets;
+    my $real_empire = $self->current_session ? $self->current_session->empire : $self;
+
+    my $planet_rs = $real_empire->planets;
     if ($self->alliance_id) {
-        $planet_rs = Lacuna->db->resultset('Map::Body')->search({-or => { empire_id => $self->id, alliance_id => $self->alliance_id }});
+        $planet_rs = Lacuna->db->resultset('Map::Body')->
+            search(
+                   { -or => { 'me.empire_id' => $real_empire->id, 'me.alliance_id' => $real_empire->alliance_id } },
+                  );
     }
+    $planet_rs = $planet_rs->search({},{ prefetch => ['empire','star'], order_by => 'me.name' });
     my %planets;
     my %stations;
     my %colonies;
+    my %bodies;
+
+    my $gen_body_info = sub {
+        my $planet = shift;
+
+        return {
+            id => $planet->id,
+            name => $planet->name,
+            zone => $planet->zone,
+            star_id => $planet->star_id,
+            star_name => $planet->star->name,
+            orbit => $planet->orbit,
+            x => $planet->x,
+            y => $planet->y, #,,,
+            empire_name => $planet->empire->name,
+            empire_id => $planet->empire_id,
+        }
+    };
+
     while (my $planet = $planet_rs->next) {
         $planets{$planet->id} = $planet->name;
+        my $type = 'colonies';
         if ($planet->get_type eq 'space station') {
             $stations{$planet->id} = $planet->name;
+            $type = $planet->empire_id == $real_empire->id ? 'mystations' : 'ourstations'
         }
         else {
             $colonies{$planet->id} = $planet->name;
         }
+
+        push @{$bodies{$type}}, $gen_body_info->($planet);
     }
-    my $embassy     = $self->highest_embassy;
-    my $embassy_id  = defined $embassy ? $embassy->id : undef;
+
+    # shouldn't have to check this once sitter_password goes away.
+    if ($self->current_session() &&
+        !$self->current_session()->_is_sitter())
+    {
+        $planet_rs =
+            Lacuna->db->resultset('Map::Body')->
+            search(
+                   {
+                       'sitterauths.sitter_id' => $real_empire->id,
+                       'me.class' => { '!=' => 'Lacuna::DB::Result::Map::Body::Planet::Station' },
+                   },
+                   {
+                       prefetch => [ 'star', { 'empire', 'sitterauths' } ],
+                       order_by => ['me.name', 'me.id'],
+                   });
+
+        while (my $planet = $planet_rs->next)
+        {
+            my $empire = $planet->empire;
+
+            # I'm not sure if we can get more than one, but getting an error message
+            # if that happens will aid in debugging.  If this seems to work consistently,
+            # we should remove this block.
+            confess [ 999, "Contact an admin / developer: More than one sitterauth is counting? sitter: ".$real_empire->id.", baby: ". $empire->id ]
+                unless $empire->sitterauths->count == 1;
+
+            # if we haven't seen this empire yet, put in its basic stats.
+            $bodies{babies}{$empire->name} ||= {
+                id                => $empire->id,
+                has_new_messages  => $empire->has_new_messages,
+                sitter_expiry     => format_date($empire->sitterauths->first->expiry),
+                maybe alliance_id => $empire->alliance_id,
+                maybe primary_embassy_id => $empire->highest_embassy && $empire->highest_embassy->id,
+            };
+
+            push @{$bodies{babies}{$empire->name}{planets}}, $gen_body_info->($planet);
+        }
+    }
 
     my $status = {
-        rpc_count           => $self->rpc_count,
-        is_isolationist     => $self->is_isolationist,
-        status_message      => $self->status_message,
+        rpc_count           => 0+$self->rpc_count,
+        is_isolationist     => 0+$self->is_isolationist,
+        status_message      => $real_empire->status_message,
         name                => $self->name,
         id                  => $self->id,
-        essentia            => $self->essentia,
-        has_new_messages    => $self->has_new_messages,
-        latest_message_id   => $self->latest_message_id,
-        home_planet_id      => $self->home_planet_id,
-        tech_level          => $self->university_level,
+        essentia            => 0+$self->essentia,
+        has_new_messages    => 0+$self->has_new_messages,
+        latest_message_id   => 0+$self->latest_message_id,
+        home_planet_id      => 0+$self->home_planet_id,
+        tech_level          => 0+$self->university_level,
         planets             => \%planets,
         stations            => \%stations,
         colonies            => \%colonies,
-        next_colony_cost    => $self->next_colony_cost("colony_ship"),
-        next_colony_srcs    => $self->next_colony_cost("short_range_colony_ship"),
-        next_station_cost   => $self->next_colony_cost("space_station"),
-        insurrect_value     => $self->next_colony_cost("spy"),
+        bodies              => \%bodies,
+        next_colony_cost    => 0+$self->next_colony_cost("colony_ship"),
+        next_colony_srcs    => 0+$self->next_colony_cost("short_range_colony_ship"),
+        next_station_cost   => 0+$self->next_colony_cost("space_station"),
+        insurrect_value     => 0+$self->next_colony_cost("spy"),
         self_destruct_active=> $self->self_destruct_active,
         self_destruct_date  => $self->self_destruct_date_formatted,
-        primary_embassy_id  => $embassy_id,
+        maybe alliance_id   => $self->alliance_id && 0+$self->alliance_id,
+        maybe primary_embassy_id  => $self->highest_embassy && 0+$self->highest_embassy->id,
     };
-    $status->{alliance_id} = $self->alliance_id if $self->alliance_id;
     return $status;
 }
 
@@ -1088,6 +1221,9 @@ before delete => sub {
     $self->sent_messages->delete;
     $self->received_messages->delete;
     $self->medals->delete;
+    $self->allbabyauths->delete;
+    $self->allsitterauths->delete;
+
     my $planets = $self->planets;
     while ( my $planet = $planets->next ) {
         $planet->sanitize if ($planet->empire_id == $self->id); #In case of a cached space station
@@ -1199,7 +1335,19 @@ sub pay_taxes {
     }
 }
 
-sub highest_embassy {
+# was being called repeatedly, so move it over to a cached value.
+has highest_embassy => (
+                        is => 'ro',
+                        isa => 'Maybe[Lacuna::DB::Result::Building::Embassy]',
+                        lazy_build => 1,
+                       );
+
+sub _build_highest_embassy {
+    my ($self) = @_;
+    $self->next_highest_embassy;
+}
+
+sub next_highest_embassy {
     my ($self, $excluding_body_id) = @_;
 
     my $search_rs = Lacuna->db->resultset('Building')->search({

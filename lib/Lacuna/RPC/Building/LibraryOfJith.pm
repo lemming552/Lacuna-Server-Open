@@ -15,8 +15,9 @@ sub model_class {
 
 sub research_species {
     my ($self, $session_id, $building_id, $view_empire_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $view_empire = Lacuna->db->resultset('Lacuna::DB::Result::Empire')->find($view_empire_id);
     
     unless (defined $view_empire) {
@@ -29,7 +30,7 @@ sub research_species {
     $building->start_work({}, 15 + ((60 * 60) * ((30-$building->effective_level)/30)));
 
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
         species => {
             name                    => $view_empire->species_name,
             description             => $view_empire->species_description,

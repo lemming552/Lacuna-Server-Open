@@ -1,5 +1,102 @@
+3.0920:
+ - Mod: Security Sweep reports give number of found spies in subject line.
+ - Add: Security Sweep API allows bypassing of empty emails.
+ - UI : New captcha panel.
+ - Fix: Resource bar bouncing quelled.
+ - UI : Clean up on logout, should make logout/login more reliable.
+ - Fix: Slightly more red tape.
+
+3.0919:
+ - Add: Adding docker support.
+ - Fix: Emails to GG owners during fissure explosion were missing numbers.
+ - Fix: Halls don't need to show up as buildable.
+ - Fix: Downgrade of SS modules fixed.
+ - Fix: Merc Guild shouldn't call not allowed RPCs when damaged.
+ - Mod: Repair tab moved to first.
+ - Mod: Terraforming platforms only form terra, GG plats can handle all gas giants.
+ - Fix: SSL shouldn't show waste in red, it's not being consumed.
+
+3.0918:
+ - Fix: Unallied players should never see anyone else in purple on the starmap.
+ - Fix: Some of the numbers in the APIs are now returned as numbers instead of strings.
+ - Mod: Add commas to total cargo in TM and SST.
+ - Fix: Initialize date_created field for spies.
+ - Mod: Can cancel more than one build at a time via API.
+ - Add: Cancel All button to dev ministry.
+ - Fix: Abandoned planets' build queues are now cancelled.
+ - Fix: Fissure medal when you cause a fissure with BHG.
+ - Fix: Training and Propaganda pays attention to the clock.
+ - Cht: /wiki replaces spaces with + so you can search for multiple words.
+ - Cht: /planet is more forgiving for new players to use.
+ - Fix: Renaming a planet changes top-right planet name.
+ - Fix: SSL resources and timers use lowest level of all tiles.
+ - Fix: Spies start infiltrating when they arrive.
+ - Fix: Burning PP spies really does make planet unhappy.
+ - Mod: Remove limit for number of plans created at a time in Arch. Min.
+ - Fix: After flipping, layoff police.
+ - Add: Intel Min can rename all spies at once (new API).
+ - Add: Incoming view to police station.
+ - Mod: Remove RPC total from options panel, put in iso status.
+ - Mod: Moved explanation texts from root to info directory.
+
+3.0917:
+ - Fix: Recalc stats when building 1+x plans.
+ - Fix: Station incoming shows your incoming as own, not station owner's incoming.
+ - Fix: Better input validation for fleet.
+ - Fix: On flip, remove any excavator sites.
+ - UI : SST list only shows valid SST targets.
+ - Fix: Duck quacking now shows RPC updates in UI. (API change.)
+ - UI : Scow images updated (thanks Husky).
+ - Fix: Remove item from SST trade now shows proper hold size requirement.
+ - UI : Add propaganda boost to the happy popup (spy icon).
+ - UI : Promotional events show up during the event.
+ - Mod: AI spies get easy jobs their first shift.
+
+3.0916:
+ - Mod: Jackpot enhanced.
+ - Fix: If parliament missing, better error handling.
+ - Fix: Make sure scows display empty cargo on return.
+ - Mod: Reduce some red tape.
+ - Fix: Deployed bleeders shouldn't get subbed.
+ - Fix: Destroying IBS removes all influence.
+ - Fix: AIs' stations can now be destroyed.
+ - Fix: Make owner of star a bit more predictable in case of ties.
+ - Fix: Gauntlet now works at uni+1 level, too.
+ - Fix: Saben will destroy planets with a bit more randomness.
+ - Mod: Can stake your own stake.
+ - Mod: Show plans in SSL in a predictable order (sorted!).
+
+3.0915:
+ - Fix: Reduce the wild resource fluctuations during planet ticking.
+ - Mod: Evein plans get an extra 5 days start time for building.
+ - Add: Lacuna promotions.
+ - Add: Orbits as BHG targets.
+ - UI : Add build-boost-from-happy to happy popup.
+ - Add: Fingerprinting browsers.
+ - UI : Essentia panel redone.
+ - Mod: Better packaging for plans using flat boxes. (1,000 space used instead of 10,000)
+
+3.0914:
+ - UI : Evein draining re-added.
+ - Fix: Effective level could be too high.
+ - Fix: AI have a better chance to train a spy.
+ - Mod: Subsidising buildings totals up more consistently.
+ - Mod: Boost RPCs can take an optional weeks parameter.
+ - Fix: Building counts were being returned wrong when building new buildings.
+
 3.0913:
  - Add: Insurrect Value & SRCS happiness cost added to PCC output.
+ - UI : Fix screen scrolling.
+ - UI : Automatically load new captcha on failure (thanks, vortigon)
+ - UI : New buildings have level visible immediately if user wants levels always displayed.
+ - Mod: Limit shipyards to 30 days' queue.
+ - Add: Constructing added to resource bar.
+ - UI : Stop the "Trade Ministry is offline" message when repairing TM
+ - UI : Added self-destruct button back.
+ - Fix: Modify sanitize to do initialize of stored values last.
+ - UI : New buildings will get level showing if user has asked for it.
+ - UI : Fix announcement window for users as logging in.
+ - UI : Fix planet jumping from links
 
 3.0912:
  - Fix: get_fleet_for returns berth appropriate ships.

@@ -16,8 +16,9 @@ sub model_class {
 
 sub view_planet {
     my ($self, $session_id, $building_id, $planet_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $planet = Lacuna->db->resultset('Lacuna::DB::Result::Map::Body')->find($planet_id);
     
     unless (defined $planet) {
@@ -40,7 +41,7 @@ sub view_planet {
         };
     }
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
         map     => {
             surface_image   => $planet->surface,
             buildings       => \@map
@@ -50,8 +51,9 @@ sub view_planet {
 
 sub list_planets {
     my ($self, $session_id, $building_id, $star_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $star;
     if ($star_id) {
         $star = Lacuna->db->resultset('Lacuna::DB::Result::Map::Star')->find($star_id);
@@ -76,7 +78,7 @@ sub list_planets {
     }
     
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
         planets => \@planets,
     };
 }

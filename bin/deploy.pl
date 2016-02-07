@@ -102,6 +102,8 @@ END_TEXT
                 # new gulp-based client.
                 chdir($repo_config->{path});
                 system("npm install");
+                system("node_modules/bower/bin/bower","install","--config.interactive=false","--allow-root")
+                    if -e "node_modules/bower/bin/bower";
                 system("gulp");
 
                 my $lacuna_dir = $dir->subdir('lacuna');

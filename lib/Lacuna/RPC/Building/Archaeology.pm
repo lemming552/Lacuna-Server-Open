@@ -16,9 +16,10 @@ sub model_class {
 
 around 'view' => sub {
     my ($orig, $self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id, skip_offline => 1);
-    my $out = $orig->($self, $empire, $building);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $out = $orig->($self, $session, $building);
     if ($building->is_working) {
         $out->{building}{work}{searching} = $building->work->{ore_type};
     }
@@ -27,8 +28,9 @@ around 'view' => sub {
 
 sub get_glyphs {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @out;
     my $glyphs = $building->body->glyph;
     while (my $glyph = $glyphs->next) {
@@ -41,15 +43,16 @@ sub get_glyphs {
     }
     return {
         glyphs  => \@out,
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     };
 }
 
 sub get_glyph_summary {
     my ($self, $session_id, $building_id) = @_;
 
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @out;
     my $glyphs = $building->body->glyph;
     while (my $glyph = $glyphs->next) {
@@ -63,45 +66,45 @@ sub get_glyph_summary {
 
     return {
         glyphs  => \@out,
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     };
 }
 
 sub get_ores_available_for_processing {
     my ($self, $session_id, $building_id, $ore) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     return {
         ore                 => $building->get_ores_available_for_processing,
-        status              => $self->format_status($empire, $building->body),
+        status              => $self->format_status($session, $building->body),
     };
 }
 
 sub search_for_glyph {
     my ($self, $session_id, $building_id, $ore) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $building->search_for_glyph($ore);
-    return $self->view($empire, $building);
+    return $self->view($session, $building);
 }
 
 sub assemble_glyphs {
     my ($self, $session_id, $building_id, $glyphs, $quantity) = @_;
     $quantity = defined $quantity ? $quantity : 1;
-    if ($quantity > 5000) {
-        confess [1011, "You can only assemble up to 5000 plans at a time"];
-    }
     if ($quantity <= 0 or int($quantity) != $quantity) {
         confess [1001, "Quantity must be a positive integer"];
     }
 
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $plan = $building->make_plan($glyphs, $quantity);
     return {
         item_name           => $plan->class->name,
         quantity            => $quantity,
-        status              => $self->format_status($empire, $building->body),
+        status              => $self->format_status($session, $building->body),
     };
 }
 
@@ -109,8 +112,9 @@ sub assemble_glyphs {
 
 sub subsidize_search {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
 
     unless ($building->is_working) {
         confess [1010, "No one is searching."];
@@ -127,13 +131,14 @@ sub subsidize_search {
     });
     $empire->update;
 
-    return $self->view($empire, $building);
+    return $self->view($session, $building);
 }
 
 sub view_excavators {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @sites;
     my $level = $building->effective_level;
     my $chances = $building->can_you_dig_it($building->body, $level, 1);
@@ -175,14 +180,15 @@ sub view_excavators {
         excavators       => \@sites,
         max_excavators   => $building->max_excavators,
         travelling       => $travel,
-        status           => $self->format_status($empire, $building->body),
+        status           => $self->format_status($session, $building->body),
     };
 }
 
 sub abandon_excavator {
     my ($self, $session_id, $building_id, $site_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $site = Lacuna->db->resultset('Lacuna::DB::Result::Excavators')->find($site_id);
     unless (defined $site) {
         confess [1002, "Excavator Site :".$site_id.": not found."];
@@ -192,17 +198,18 @@ sub abandon_excavator {
     }
     $building->remove_excavator($site);
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     };
 }
 
 sub mass_abandon_excavator {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
-	$building->excavators->delete;
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    $building->excavators->delete;
 	return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     }; 
 }
 

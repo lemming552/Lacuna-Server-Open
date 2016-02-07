@@ -4,6 +4,7 @@ use Moose;
 use utf8;
 no warnings qw(uninitialized);
 extends 'Lacuna::RPC::Building';
+use List::Util qw(any);
 
 sub app_url {
     return '/missioncommand';
@@ -15,15 +16,16 @@ sub model_class {
 
 sub get_missions {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @missions;
     my $missions = $building->missions;
     my $count;
     my @listed;
     while (my $mission = $missions->next) {
         my $params = $mission->params;
-        next if $mission->mission_file_name ~~ \@listed;
+        next if any { $mission->mission_file_name eq $_ } @listed;
         next if $params->get('max_university_level') < $empire->university_level;
         next if Lacuna->cache->get($mission->mission_file_name, $empire->id);
         push @listed, $mission->mission_file_name;
@@ -44,15 +46,16 @@ sub get_missions {
         last if ($count >= $building->effective_level);
     }
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
         missions    => \@missions,
     };
 }
 
 sub complete_mission {
     my ($self, $session_id, $building_id, $mission_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1002, 'Please specify a mission id.'] unless $mission_id;
     my $mission = $building->missions->find($mission_id);
     confess [1002, 'No such mission.'] unless $mission;
@@ -64,21 +67,22 @@ sub complete_mission {
     $mission->check_objectives($body);
     $mission->complete($body);
     return {
-        status      => $self->format_status($empire, $body),
+        status      => $self->format_status($session, $body),
     }
 }
 
 sub skip_mission {
     my ($self, $session_id, $building_id, $mission_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1002, 'Please specify a mission id.'] unless $mission_id;
     my $mission = $building->missions->find($mission_id);
     confess [1002, 'No such mission.'] unless $mission;
     my $body = $building->body;
     $mission->skip($body);
     return {
-        status      => $self->format_status($empire, $body),
+        status      => $self->format_status($session, $body),
     }
 }
 

@@ -82,6 +82,7 @@ sub produces_food_items { [] };
 use constant time_to_build          => 60;
 
 use constant build_with_halls       => 0;
+use constant subsidizable           => 1;
 
 use constant energy_to_build        => 0;
 use constant food_to_build          => 0;
@@ -130,6 +131,8 @@ use constant food_storage           => 0;
 use constant ore_storage            => 0;
 use constant waste_storage          => 0;
 
+use constant can_really_be_built    => 1;
+
 # BASE FORMULAS
 
 has effective_level => (
@@ -142,7 +145,7 @@ has effective_level => (
 sub _build_effective_level
 {
     my $self = shift;
-    my $uni_prod   = ($self->body->empire) ? $self->body->empire->university_level + 1 : 1;
+    my $uni_prod   = ($self->body->empire) ? $self->body->empire->university_level : 1;
     my $real_level = $self->level;
     # take whichever one is lower.
     my $eff_level  = min($uni_prod + 1, $real_level);
@@ -646,6 +649,10 @@ sub can_build_on {
     return 1;
 }
 
+sub finish_building {
+    my $self = shift;
+    # most buildings don't need to do anything here.
+}
 
 # DEMOLISH
 
@@ -865,12 +872,12 @@ sub cost_to_upgrade {
     }
     else {
         return {
-            food    => sprintf('%.0f',$self->food_to_build * $upgrade_cost * $upgrade_cost_reduction),
-            energy  => sprintf('%.0f',$self->energy_to_build * $upgrade_cost * $upgrade_cost_reduction),
-            ore     => sprintf('%.0f',$self->ore_to_build * $upgrade_cost * $upgrade_cost_reduction),
-            water   => sprintf('%.0f',$self->water_to_build * $upgrade_cost * $upgrade_cost_reduction),
-            waste   => sprintf('%.0f',$self->waste_to_build * $upgrade_cost * $upgrade_cost_reduction),
-            time    => sprintf('%.0f',$time_cost),
+            food    => int($self->food_to_build * $upgrade_cost * $upgrade_cost_reduction),
+            energy  => int($self->energy_to_build * $upgrade_cost * $upgrade_cost_reduction),
+            ore     => int($self->ore_to_build * $upgrade_cost * $upgrade_cost_reduction),
+            water   => int($self->water_to_build * $upgrade_cost * $upgrade_cost_reduction),
+            waste   => int($self->waste_to_build * $upgrade_cost * $upgrade_cost_reduction),
+            time    => int($time_cost),
         };
     }
 }
@@ -907,25 +914,12 @@ sub start_upgrade {
     
     # set time to build, plus what's in the queue
     my $now = DateTime->now;
-    my $upgrade_ends = $in_parallel || $body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')
-        ? $now : $body->get_existing_build_queue_time;
+    my $upgrade_ends = $in_parallel ? $now : $body->get_existing_build_queue_time;
     if ($upgrade_ends < $now) {
         $upgrade_ends = $now;
     }
 
-    my $time_to_add;
-    if ($body->isa('Lacuna::DB::Result::Map::Body::Planet::Station') ) {
-        if ($self->class eq 'Lacuna::DB::Result::Building::DeployedBleeder') {
-            $time_to_add = $cost->{time};
-        }
-        else {
-            $time_to_add = 60 * 60 * 72;
-        }
-    }
-    else {
-        $time_to_add = $cost->{time};
-    }
-    $upgrade_ends->add(seconds=>$time_to_add);
+    $upgrade_ends->add(seconds=>$cost->{time});
     # add to queue
     $self->update({
         is_upgrading    => 1,
@@ -1278,7 +1272,16 @@ sub _build_population {
 }
 
 {
-    local *ensure_class_loaded = sub {}; # graham's crazy fix for circular dependency, may break if DynamicSubclass gets upgraded
+    # Because some buildings inherit from ::Permanent instead of inheriting
+    # from ::Building directly, we end up with
+    # Class::C3::Componentised::ensure_class_loaded getting confused as to
+    # whether Permanent-derived modules are loaded or not.  However, since
+    # they're going to be loaded anyway, this hack avoids the extra loading
+    # that DynamicSubclass tries to do.
+    # Alternatives: fix DS to defer loading until first use, "our @ISA;" in
+    # Permanent (and any other intermediate class we create in the future).
+    # This still seems to be the least-intrusive hack.
+    local *ensure_class_loaded = sub {};
     __PACKAGE__->typecast_map(class => {
         'Lacuna::DB::Result::Building::CloakingLab' => 'Lacuna::DB::Result::Building::CloakingLab',
         'Lacuna::DB::Result::Building::MissionCommand' => 'Lacuna::DB::Result::Building::MissionCommand',

@@ -18,8 +18,9 @@ sub model_class {
 
 sub view_build_queue {
     my ($self, $session_id, $building_id, $page_number) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body = $building->body;
     $page_number ||= 1;
     my @building;
@@ -37,7 +38,7 @@ sub view_build_queue {
     }
     my $number_of_ships = $ships->pager->total_entries;
     return {
-        status                      => $self->format_status($empire, $body),
+        status                      => $self->format_status($session, $body),
         number_of_ships_building    => $number_of_ships,
         ships_building              => \@building,
         cost_to_subsidize           => $number_of_ships,
@@ -54,15 +55,16 @@ sub view_build_queue {
 
 sub subsidize_build_queue {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body = $building->body;
 
     my $ships = $building->building_ships;
 
     my $cost = $ships->count;
     unless ($empire->essentia >= $cost) {
-        confess [1011, "Not enough essentia."];    
+        confess [1011, "Not enough essentia."];
     }
 
     $empire->spend_essentia({
@@ -76,14 +78,15 @@ sub subsidize_build_queue {
     }
     $building->finish_work->update;
  
-    return $self->view($empire, $building);
+    return $self->view($session, $building);
 }
 
 sub delete_build {
     my ($self, $session_id, $building_id, $ship_id) = @_;
 
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
 
     if (!ref $ship_id)
     {
@@ -111,7 +114,7 @@ sub delete_build {
     }
 
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         cancelled_count => $cancelled_count,
     };
 }
@@ -123,8 +126,9 @@ sub subsidize_ship {
     if (ref($args) ne "HASH") {
         confess [1000, "You have not supplied a hash reference"];
     }
-    my $empire              = $self->get_empire_by_session($args->{session_id});
-    my $building            = $self->get_building($empire, $args->{building_id});
+    my $session  = $self->get_session({session_id => $args->{session_id}, building_id => $args->{building_id} });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($building->effective_level > 0 and $building->efficiency == 100) {
         confess [1003, "You must have a functional Space Port!"];
     }
@@ -150,7 +154,7 @@ sub subsidize_ship {
     $scheduled_ship->reschedule_queue;
     $scheduled_ship->finish_construction;
 
-    return $self->view_build_queue($empire, $building);
+    return $self->view_build_queue($session, $building);
 
 }
 
@@ -165,8 +169,9 @@ sub build_ship {
         confess [1001, "Quantity must be a positive integer"];
     }
     my $costs;
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body_id     = $building->body_id;
 
     for (1..$quantity) {
@@ -180,7 +185,7 @@ sub build_ship {
         $ship->body_id($body_id);
         $ship->update;
     }
-    return $self->view_build_queue($empire, $building);
+    return $self->view_build_queue($session, $building);
 }
 
 # All buildings must be on the same body
@@ -199,7 +204,8 @@ sub build_ship {
 
 sub build_ships {
     my ($self, $session_id, $opts) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
 
     my $quantity = $opts->{quantity} // 1;
     if ($quantity > 600) { # of course, this would only be reached if the planet had 20 shipyards at level 30
@@ -213,9 +219,9 @@ sub build_ships {
     my $building_view;
     if ($opts->{building_id}) {
         if (ref($opts->{building_id}) eq 'ARRAY') {
-            push @buildings, map { $self->get_building($empire, $_) } @{$opts->{building_id}}
+            push @buildings, map { $self->get_building($session, $_) } @{$opts->{building_id}}
         } else {
-            push @buildings, $self->get_building($empire, $opts->{building_id});
+            push @buildings, $self->get_building($session, $opts->{building_id});
         }
         $opts->{body_id} = $buildings[0]->body_id;
         $building_view = $buildings[0];
@@ -224,10 +230,12 @@ sub build_ships {
     } else {
         confess [1001, "Either building id(s) or body id must be provided"];
     }
-    my $body = $self->get_body($empire, $opts->{body_id});
+    my $body = $self->get_body($session, $opts->{body_id});
+    @buildings = grep { $_->level > 0 && $_->efficiency >= 100 } @buildings;
 
     my @all_sys = grep {
-        $_->class eq 'Lacuna::DB::Result::Building::Shipyard'
+        $_->class eq 'Lacuna::DB::Result::Building::Shipyard' &&
+        $_->level > 0 && $_->efficiency >= 100
     } @{$body->building_cache};
 
     my $ships_building = Lacuna->db->resultset("Ships")->search({body_id => $opts->{body_id}, task => 'Building'})->count;
@@ -242,7 +250,7 @@ sub build_ships {
 
     given(lc $opts->{autoselect}) {
         when([undef,'']) {
-            confess [1011, 'No building_id specified'] if @buildings < 1;
+            confess [1011, 'No repaired building_id specified'] if @buildings < 1;
         }
         when('all') {
             @buildings = @all_sys;
@@ -303,8 +311,10 @@ sub build_ships {
     #my $needs_refresh;
     for (1..$quantity) {
         my $building = $sorter->();
-        my $ship = Lacuna->db->resultset('Ships')->new({type => $opts->{type}});
         my $cost = $cost_for->($building);
+        confess [1007, "Shipyards don't have managers capable of handling 30 days' of orders."]
+            if $building->work_seconds_remaining + $cost->{seconds} > 60 * 60 * 24 * 30; # don't go over 30 days.
+        my $ship = Lacuna->db->resultset('Ships')->new({type => $opts->{type}});
         $building->can_build_ship($ship, $cost, 1);
         $building->spend_resources_to_build_ship($cost);
         $building->build_ship($ship, $cost->{seconds});
@@ -320,15 +330,16 @@ sub build_ships {
     #    $body->update;
     #}
 
-    #return $self->view_build_queue($empire, $building_view);
-    Lacuna::RPC::Body->new->get_buildings($empire, $body);
+    #return $self->view_build_queue($session, $building_view);
+    Lacuna::RPC::Body->new->get_buildings($session, $body);
 }
 
 
 sub get_buildable {
     my ($self, $session_id, $building_id, $tag) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my %buildable;
     foreach my $type (SHIP_TYPES) {
         my $ship = Lacuna->db->resultset('Ships')->new({type=>$type});
@@ -368,7 +379,7 @@ sub get_buildable {
         docks_available => $docks,
         build_queue_max => $max_ships,
         build_queue_used => $total_ships_building,
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         };
 }
 

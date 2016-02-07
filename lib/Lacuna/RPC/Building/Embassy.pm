@@ -13,9 +13,10 @@ sub app_url {
 
 around 'view' => sub {
     my ($orig, $self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id, skip_offline => 1);
-    my $out = $orig->($self, $empire, $building);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $out = $orig->($self, $session, $building);
     my $alliance = eval{$building->alliance};
     if (defined $alliance) {
         $out->{alliance_status} = $alliance->get_status;
@@ -29,81 +30,88 @@ sub model_class {
 
 sub assign_alliance_leader {
     my ($self, $session_id, $building_id, $empire_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($empire_id) {
         confess [1002, 'You must specify which empire you want to take over leadership.'];
     }
-    my $new_leader = Lacuna->db->resultset('Lacuna::DB::Result::Empire')->find($empire_id);
+    my $new_leader = Lacuna->db->resultset('Empire')->find($empire_id);
     unless (defined $new_leader) {
         confess [1002, 'The empire you specified to take over as leader does not exist.'];
     }
     $building->assign_alliance_leader($new_leader);
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         alliance        => $building->alliance->get_status,
     };
 }
 
 sub create_alliance {
     my ($self, $session_id, $building_id, $name) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $alliance = $building->create_alliance($name);
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         alliance        => $alliance->get_status,
     };
 }
 
 sub get_alliance_status {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         alliance        => $building->get_alliance_status,
     };
 }
 
 sub dissolve_alliance {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $building->dissolve_alliance;
     $empire->discard_changes;
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub leave_alliance {
     my ($self, $session_id, $building_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $building->leave_alliance($message);
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub expel_member {
     my ($self, $session_id, $building_id, $member_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
-    my $member = Lacuna->db->resultset('Lacuna::DB::Result::Empire')->find($member_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $member = Lacuna->db->resultset('Empire')->find($member_id);
     $building->expel_member($member, $message);
     return $self->get_alliance_status($empire, $building);
 }
 
 sub accept_invite {
     my ($self, $session_id, $building_id, $invite_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     if ($empire->current_session->is_sitter) {
         confess [1015, 'Sitters cannot join alliances.'];
     }
     $empire->current_session->check_captcha;
-    my $building = $self->get_building($empire, $building_id);
     unless ($invite_id) {
         confess [1002, 'You must specify an invite id.'];
     }
@@ -122,8 +130,9 @@ sub accept_invite {
 
 sub reject_invite {
     my ($self, $session_id, $building_id, $invite_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($invite_id) {
         confess [1002, 'You must specify an invite id.'];
     }
@@ -133,14 +142,15 @@ sub reject_invite {
     }
     $building->reject_invite($invite, $message);
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub withdraw_invite {
     my ($self, $session_id, $building_id, $invite_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($invite_id) {
         confess [1002, 'You must specify an invite id.'];
     }
@@ -150,14 +160,15 @@ sub withdraw_invite {
     }
     $building->withdraw_invite($invite, $message);
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub send_invite {
     my ($self, $session_id, $building_id, $empire_id, $message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($empire_id) {
         confess [1002, 'You must specify which empire you want to invite.'];
     }
@@ -167,46 +178,50 @@ sub send_invite {
     }
     $building->send_invite($invitee, $message);
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub get_pending_invites {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     return {
         invites         => $building->get_pending_invites,
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub get_my_invites {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     return {
         invites         => $building->get_my_invites,
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 
 sub update_alliance {
     my ($self, $session_id, $building_id, $params) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $alliance = $building->update_alliance($params);
     return {
         alliance        => $alliance->get_status,
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
     };
 }
 
 sub view_stash {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body = $building->body;
     my %stored;
     foreach my $resource ('water','energy',FOOD_TYPES,ORE_TYPES) {
@@ -214,7 +229,7 @@ sub view_stash {
     }
     return {
         stash           => $building->alliance->stash || {},
-        status          => $self->format_status($empire, $body),
+        status          => $self->format_status($session, $body),
         max_exchange_size   => $building->max_exchange_size,
         exchanges_remaining_today   => $building->exchanges_remaining_today,
         stored          => \%stored,
@@ -223,24 +238,27 @@ sub view_stash {
 
 sub donate_to_stash {
     my ($self, $session_id, $building_id, $donation) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $building->alliance->donate($building->body, $donation);
-    return $self->view_stash($empire, $building);
+    return $self->view_stash($session, $building);
 }
 
 sub exchange_with_stash {
     my ($self, $session_id, $building_id, $donation, $request) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $building->exchange_with_stash($donation, $request);
-    return $self->view_stash($empire, $building);
+    return $self->view_stash($session, $building);
 }
 
 sub view_propositions {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @out;
     my $propositions = $building->propositions->search({ status => 'Pending'});
     while (my $proposition = $propositions->next) {
@@ -248,16 +266,16 @@ sub view_propositions {
         push @out, $proposition->get_status($empire);
     }
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         propositions    => \@out,
     };
 }
 
 sub cast_vote {
     my ($self, $session_id, $building_id, $proposition_id, $vote) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $cache = Lacuna->cache;
     my $lock = 'vote_lock_'.$empire->id;
     if ($cache->get($lock, $proposition_id)) {
@@ -275,7 +293,7 @@ sub cast_vote {
 
     $proposition->cast_vote($empire, $vote);
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
         proposition => $proposition->get_status($empire),
     };
 }

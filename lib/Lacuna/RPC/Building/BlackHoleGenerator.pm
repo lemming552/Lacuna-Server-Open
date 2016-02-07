@@ -17,9 +17,10 @@ sub model_class {
 
 around 'view' => sub {
     my ($orig, $self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id, skip_offline => 1);
-    my $out = $orig->($self, $empire, $building);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $out = $orig->($self, $session, $building);
     my $body = $building->body;
     
     my $throw = 0; my $reason = '';
@@ -64,6 +65,19 @@ around 'view' => sub {
     };
     return $out;
 };
+
+my @orbits = (
+              undef,
+              [ 1,  2], # 1
+              [ 2,  1], # 2
+              [ 2, -1], # 3
+              [ 1, -2], # 4
+              [-1, -2], # 5
+              [-2, -1], # 6
+              [-2,  1], # 7
+              [-1,  2], # 8
+             );
+my %orbit_for; $orbit_for{$orbits[$_][0]}{$orbits[$_][1]} = $_ for 1..8;
 
 sub find_target {
     my ($self, $empire, $target_params) = @_;
@@ -128,31 +142,7 @@ sub find_target {
             if (defined $star) {
                 my $sx = $star->x; my $sy = $star->y;
                 my $tx = $target_params->{x}; my $ty = $target_params->{y};
-                my $orbit = 0;
-                if (($sx+1 == $tx) && ($sy+2 == $ty)) {
-                    $orbit = 1;
-                }
-                elsif (($sx+2 == $tx) && ($sy+1 == $ty)) {
-                    $orbit = 2;
-                }
-                elsif (($sx+2 == $tx) && ($sy-1 == $ty)) {
-                    $orbit = 3;
-                }
-                elsif (($sx+1 == $tx) && ($sy-2 == $ty)) {
-                    $orbit = 4;
-                }
-                elsif (($sx-1 == $tx) && ($sy-2 == $ty)) {
-                    $orbit = 5;
-                }
-                elsif (($sx-2 == $tx) && ($sy-1 == $ty)) {
-                    $orbit = 6;
-                }
-                elsif (($sx-2 == $tx) && ($sy+1 == $ty)) {
-                    $orbit = 7;
-                }
-                elsif (($sx-1 == $tx) && ($sy+2 == $ty)) {
-                    $orbit = 8;
-                }
+                my $orbit = $orbit_for{$tx-$sx}{$ty-$sy};
                 if ($orbit) {
                     $target = {
                         id      => 0,
@@ -233,17 +223,40 @@ sub find_target {
             $target_type = "zone";
         }
     }
-    elsif (exists $target_params->{star_name}) {
-        $target = Lacuna->db->
-            resultset('Lacuna::DB::Result::Map::Star')->search(
-                { name => $target_params->{star_name} }
-            )->first;
+    elsif (exists $target_params->{star_name} or exists $target_params->{star_id}) {
+        my ($type,$value) = exists $target_params->{star_id} ?
+            (id => $target_params->{star_id}) : (name => $target_params->{star_name});
+
+        $target = $db->resultset('Lacuna::DB::Result::Map::Star')->find({$type => $value});
         $target_type = "star";
-    }
-    elsif (exists $target_params->{star_id}) {
-        $target = Lacuna->db->
-        resultset('Lacuna::DB::Result::Map::Star')->find($target_params->{star_id});
-        $target_type = "star";
+        $target_word =~ s/:?orbit:?//g;
+
+        if ($target && $target_params->{orbit} && 1 <= $target_params->{orbit} && $target_params->{orbit} <= 8) {
+            my $star = $target;
+            my $orbit = int($target_params->{orbit});
+            my ($x, $y) = ($star->x + $orbits[$orbit][0], $star->y + $orbits[$orbit][1]); #++);
+
+            $target = $db->resultset('Map::Body')->find({ x => $x, y => $y });
+            if ($target)
+            {
+                $target_type = $target->get_type;
+            }
+            else
+            {
+                $target = {
+                    id      => 0,
+                    name    => "Empty Space",
+                    orbit   => $orbit,
+                    type    => 'empty',
+                    x       => $x,
+                    y       => $y,
+                    zone    => $star->zone,
+                    star    => $star,
+                    star_id => $star->id,
+                };
+                $target_type = "empty";
+            }
+        }
     }
     unless (defined $target) {
         confess [ 1002, 'Could not find '.$target_word.' target.'];
@@ -253,8 +266,9 @@ sub find_target {
 
 sub get_actions_for {
     my ($self, $session_id, $building_id, $target_params) = @_;
-    my $empire   = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body = $building->body;
     my ($target, $target_type) = $self->find_target($empire, $target_params);
     my @tasks = bhg_tasks($building);
@@ -278,7 +292,7 @@ sub get_actions_for {
         }
     }
     return {
-        status => $self->format_status($empire, $body),
+        status => $self->format_status($session, $body),
         tasks  => \@tasks
     };
 }
@@ -665,8 +679,9 @@ sub generate_singularity {
             params        => shift,
         };
     }
-    my $empire    = $self->get_empire_by_session($args->{session_id});
-    my $building  = $self->get_building($empire, $args->{building_id});
+    my $session  = $self->get_session({session_id => $args->{session_id}, building_id => $args->{building_id} });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $task_name = $args->{task_name};
     my $subsidize = $args->{subsidize};
     
@@ -742,7 +757,7 @@ sub generate_singularity {
                 $body->add_news(75, 'Scientists revolt against %s for despicable practices.', $empire->name);
                 $effect->{fail} = bhg_self_destruct($building);
                 return {
-                    status => $self->format_status($empire, $body),
+                    status => $self->format_status($session, $body),
                     effect => $effect,
                 };
             }
@@ -757,7 +772,7 @@ sub generate_singularity {
             );
             $effect->{fail} = bhg_self_destruct($building);
             return {
-                status => $self->format_status($empire, $body),
+                status => $self->format_status($session, $body),
                 effect => $effect,
             };
         }
@@ -840,11 +855,12 @@ sub generate_singularity {
         if ($target->id == $body->star->id) {
             confess [1009, "You are already in that system"];
         }
-        if ($target->station_id) {
-            unless ($body->empire->alliance_id && $target->station->alliance_id == $body->empire->alliance_id) {
-                confess [1009, 'That star system is claimed by '.$tstar->station->alliance->name.'.'];
-            }
-        }
+# This is handled now by check_member_laws
+#        if ($target->station_id) {
+#            unless ($body->empire->alliance_id && $target->station->alliance_id == $body->empire->alliance_id) {
+#                confess [1009, 'That star system is claimed by '.$tstar->station->alliance->name.'.'];
+#            }
+#        }
         # Let's check all planets in our system and target system
         qualify_moving_sys($building, $target);
 #Need to add to qualify
@@ -1186,7 +1202,7 @@ sub generate_singularity {
     }
     
     return {
-        status => $self->format_status($empire, $body),
+        status => $self->format_status($session, $body),
         effect => $effect,
     };
 }
@@ -1788,6 +1804,7 @@ sub bhg_random_fissure {
             });
             $target->build_building($building, undef, 1);
             $body->add_news(50, 'Astronomers detect a gravitational anomoly on %s.', $target->name);
+            $body->empire->add_medal('Fissure');
             $return->{message} = "Fissure formed";
             my $minus_x = 0 - $target->x;
             my $minus_y = 0 - $target->y;
@@ -1905,6 +1922,7 @@ sub bhg_self_destruct {
     $body->needs_recalc(1);
     $body->update;
     $building->update({class=>'Lacuna::DB::Result::Building::Permanent::Fissure'});
+    $body->empire->add_medal('Fissure');
     $return->{message} = "Black Hole Generator Destroyed";
     return $return;
 }
@@ -2349,9 +2367,10 @@ sub bhg_tasks {
 
 sub subsidize_cooldown {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
-    
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+
     unless ($building->is_working) {
         confess [1010, "BHG is not in cooldown mode."];
     }
@@ -2366,8 +2385,8 @@ sub subsidize_cooldown {
         reason  => 'BHG cooldown subsidy after the fact',
     });
     $empire->update;
-    
-    return $self->view($empire, $building);
+
+    return $self->view($session, $building);
 }
 
 __PACKAGE__->register_rpc_method_names(qw(generate_singularity get_actions_for subsidize_cooldown));

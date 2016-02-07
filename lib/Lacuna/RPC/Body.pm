@@ -8,34 +8,38 @@ use Lacuna::Verify;
 use Lacuna::Constants qw(BUILDABLE_CLASSES);
 use DateTime;
 use Lacuna::Util qw(randint);
+use List::Util qw(all);
 use List::MoreUtils qw(uniq);
 use Carp;
 use feature 'switch';
 
 sub get_status {
     my ($self, $session_id, $body_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
-    return $self->format_status($empire, $body);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body =   $session->current_body;
+    return $self->format_status($session, $body);
 }
 
 sub get_body_status {
     my ($self, $args) = @_;
 
-    my $empire = $self->get_empire_by_session($args->{session_id});
+    my $session = $self->get_session({session_id => $args->{session_id}});
+    my $empire = $session->current_empire;
     my $body = Lacuna->db->resultset('Map::Body')->find($args->{body_id});
     confess [1000, 'Cannot find that body.'] unless $body;
 
     return {
         body    => $body->get_status,
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
     };
 }
 
 sub abandon {
     my ($self, $session_id, $body_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
     if ($body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) { 
         my $proposition = Lacuna->db->resultset('Lacuna::DB::Result::Propositions')->new({
             type            => 'AbandonStation',
@@ -50,7 +54,7 @@ sub abandon {
     }
     $body->abandon;
     $empire->add_medal('abandoned_colony');
-    return $self->format_status($empire);
+    return $self->format_status($session);
 }
 
 sub rename {
@@ -63,8 +67,10 @@ sub rename {
         ->no_padding
         ->not_ok(Lacuna->db->resultset('Lacuna::DB::Result::Map::Body')->search({name=>$name, 'id'=>{'!='=>$body_id}})->count); # name available
     
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
+
     if ($body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) {
         unless ($body->parliament->effective_level >= 3) {
             confess [1013, 'You need to have a level 3 Parliament to rename a station.'];
@@ -95,8 +101,9 @@ sub rename {
 
 sub get_buildings {
     my ($self, $session_id, $body_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
     if ($body->needs_surface_refresh) {
         $body->needs_surface_refresh(0);
         $body->update;
@@ -128,14 +135,15 @@ sub get_buildings {
         }
     }
     
-    return {buildings=>\%out, body=>{surface_image => $body->surface}, status=>$self->format_status($empire, $body)};
+    return {buildings=>\%out, body=>{surface_image => $body->surface}, status=>$self->format_status($session, $body)};
 }
 
 sub repair_list {
     my ($self, $session_id, $body_id, $building_ids) = @_;
 
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
 
     if (scalar @$building_ids > 121) {
         confess [1002, 'Invalid number of buildings in argument.'];
@@ -146,10 +154,11 @@ sub repair_list {
         $body->update;
     }
     my @buildings = @{$body->building_cache};
+    my %all_ids = map { $_->id => $_ } @buildings;
 
     my %out;
     for my $bld_id (@{$building_ids}) {
-        my ( $building ) = grep { $_->id == $bld_id } @buildings;
+        my $building = $all_ids{$bld_id};
         next unless $building;
         next unless $building->efficiency < 100;
         my $return;
@@ -179,14 +188,21 @@ sub repair_list {
     }
     return {
         buildings=>\%out,
-        status=>$self->format_status($empire, $body)
+        status=>$self->format_status($session, $body)
     };
 }
 
 sub rearrange_buildings {
   my ($self, $session_id, $body_id, $arrangement) = @_;
-  my $empire = $self->get_empire_by_session($session_id);
-  my $body = $self->get_body($empire, $body_id);
+  confess [1002, "Arrangement must be an array reference of hashes" ]
+      unless $arrangement &&
+      ref $arrangement eq 'ARRAY' &&
+      all { ref $_ eq 'HASH' && exists $_->{id} && exists $_->{x} && exists $_->{y} } @$arrangement;
+
+
+  my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+  my $empire = $session->current_empire;
+  my $body   = $session->current_body;
   my %cur_lay; my %new_lay;
   my %cur_ids; my %new_ids;
   my @miss_in_new; my @miss_in_cur;
@@ -231,8 +247,8 @@ sub rearrange_buildings {
     push @miss_in_cur, $id unless defined($cur_ids{$id});
     if (defined($new_lay{$spot})) {
       confess [1013,
-        sprintf("Trying to place %s in %s, where you alread have %s",
-          $new_ids{$id}->{name}, $spot, $new_ids{$new_lay{$spot}}->{name})
+        sprintf("Trying to place %s (%s) in %s, where you already have %s (%s)",
+                $new_ids{$id}->{name}, $id, $spot, $new_ids{$new_lay{$spot}}->{name}, $new_lay{$spot})
       ];
     }
     $new_lay{$spot} = $id;
@@ -276,7 +292,7 @@ sub rearrange_buildings {
   }
   return { moved => \@moved,
            body => {surface_image => $body->surface},
-           status => $self->format_status($empire, $body)};
+           status => $self->format_status($session, $body)};
 }
 
 sub check_positions {
@@ -420,8 +436,9 @@ sub check_positions {
 
 sub get_buildable {
     my ($self, $session_id, $body_id, $x, $y, $tag) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
     
     my $building_rs = Lacuna->db->resultset('Lacuna::DB::Result::Building');
 
@@ -443,11 +460,8 @@ sub get_buildable {
     
     # build queue
     my $dev = $body->development;
-    my $max_items_in_build_queue = 1;
-    if (defined $dev) {
-        $max_items_in_build_queue += $dev->effective_level;
-    }
-    my $items_in_build_queue = scalar @{$body->builds};
+    my $max_items_in_build_queue = $body->build_queue_size;
+    my $items_in_build_queue = $body->build_queue_length;
     
     if ($body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) { 
         @buildable = ();
@@ -459,6 +473,7 @@ sub get_buildable {
     my %plans;
     my @buildable_plans = sort {$a->extra_build_level <=> $b->extra_build_level} grep{$_->level == 1} @{$body->plan_cache};
     for my $plan (@buildable_plans) {
+        next unless eval { $plan->class->can_really_be_built };
         push @buildable, $plan->class->controller_class;
         $plans{$plan->class} = $plan->extra_build_level;
     }
@@ -468,7 +483,7 @@ sub get_buildable {
         my $building = $building_rs->new(\%properties);
         my @tags = $building->build_tags;
         if ($properties{class} ~~ [keys %plans]) {
-            push @tags, 'Plan',
+            push @tags, 'Plan';
         }
         if ($tag) {
             next unless ($tag ~~ \@tags);
@@ -477,7 +492,7 @@ sub get_buildable {
         my $can_build = eval{$body->has_met_building_prereqs($building, $cost)};
         my $reason = $@;
         if ($can_build) {
-            push @tags, 'Now';          
+            push @tags, 'Now';
         }
         elsif (ref $reason ne 'ARRAY') {
             confess $reason;
@@ -492,7 +507,7 @@ sub get_buildable {
             url         => $class->app_url,
             image       => $building->image_level,
             build       => {
-                can         => ($can_build) ? 1 : 0,                
+                can         => ($can_build) ? 1 : 0,
                 cost        => $cost,
                 reason      => $reason,
                 tags        => \@tags,
@@ -509,26 +524,28 @@ sub get_buildable {
         }
     }
 
-    return {buildable=>\%out, build_queue => { max => $max_items_in_build_queue, current => $items_in_build_queue}, status=>$self->format_status($empire, $body)};
+    return {buildable=>\%out, build_queue => { max => $max_items_in_build_queue, current => $items_in_build_queue}, status=>$self->format_status($session, $body)};
 }
 
 sub get_buildable_locations {
     my ($self, $opts) = @_;
-    my $empire = $self->get_empire_by_session($opts->{session_id});
-    my $body = $self->get_body($empire, $opts->{body_id});
+    my $session = $self->get_session($opts);
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
 
     my %args;
     $args{size} = $opts->{size} if $opts->{size} and $opts->{size} ~~ [1,4,9];
 
     return {
-        status => $self->format_status($empire, $body),
+        status => $self->format_status($session, $body),
         unoccupied => $body->find_free_spaces(\%args),
     }
 }
 
 sub view_laws {
     my ($self, $session_id, $body_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session = $self->get_session({session_id => $session_id});
+    my $empire = $session->current_empire;
     my $body = Lacuna->db->resultset('Lacuna::DB::Result::Map::Body')
                 ->find($body_id);
     if ($body and $body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) {
@@ -538,13 +555,28 @@ sub view_laws {
             push @out, $law->get_status($empire);
         }
         return {
-            status          => $self->format_status($empire, $body),
+            status          => $self->format_status($session, $body),
             laws            => \@out,
+            station         => {
+                id   => $body->id,
+                name => $body->name,
+                zone => $body->zone,
+                x    => $body->x,
+                y    => $body->y,,,
+                empire => {
+                    id   => $body->empire_id,
+                    name => $body->empire->name,
+                },
+                alliance => {
+                    id   => $body->alliance_id,
+                    name => $body->alliance->name,
+                },
+            },
         };
     }
     else {
         return {
-            status => $self->format_status($empire, $body),
+            status => $self->format_status($session, $body),
             laws   => [ { name => "Not a Station",
                           descripition => "Not a Station",
                           date_enacted => "00 00 0000 00:00:00 +0000",
@@ -557,8 +589,9 @@ sub view_laws {
 sub set_colony_notes
 {
     my ($self, $session_id, $body_id, $opts) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $body = $self->get_body($empire, $body_id);
+    my $session = $self->get_session({session_id => $session_id, body_id => $body_id});
+    my $empire = $session->current_empire;
+    my $body   = $session->current_body;
     my $notes = $opts->{notes};
 
     #Lacuna::Verify->new(content=>\$notes, throws=>[1000,'Content may not have any of the following characters: @&<>;{}()',$notes])
@@ -568,7 +601,7 @@ sub set_colony_notes
     $body->update;
 
     return {
-        status => $self->format_status($empire, $body),
+        status => $self->format_status($session, $body),
     };
 }
 

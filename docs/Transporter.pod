@@ -23,9 +23,18 @@ The list of methods below represents changes and additions to the methods that a
    "building" : { ... },
    "status" : { ... },
    "transport" : {
-     "max" : 2500
+     "max" : 2500,
+     "pushable" : [
+         "id" : 1234, # body ID
+         "name" : "Planet Name",
+         "x" : -35,
+         "y" : 47,
+         "zone" : "0|0",
+     ]
    }
  }
+
+The alphabetical (on name) pushable list will only include planets with currently-online Transporters.
 
 
 =head2 add_to_market ( session_id, building_id, offer, ask )
@@ -193,7 +202,7 @@ Returns a list of ships that may be traded. Used with the C<add_trade> method.
         },
         ...
     ],
-    "cargo_space_used_each" : 10000,
+    "cargo_space_used_each" : 50000,
     "status" : { ... }
  }
 
@@ -254,7 +263,7 @@ Used with the C<add_trade> method.
         },
         ...
     ],
-    "cargo_space_used_each" : 10000,
+    "cargo_space_used_each" : 1000,
     "status" : { ... }
  }
 

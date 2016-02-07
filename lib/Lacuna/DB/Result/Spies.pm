@@ -46,6 +46,10 @@ __PACKAGE__->add_columns(
     next_task               => { data_type => 'varchar', size => 30, is_nullable => 0, default_value => 'Idle' },
 );
 
+sub _default_date_created {
+    DateTime->now
+}
+
 __PACKAGE__->belongs_to('empire', 'Lacuna::DB::Result::Empire', 'empire_id');
 __PACKAGE__->belongs_to('from_body', 'Lacuna::DB::Result::Map::Body', 'from_body_id');
 __PACKAGE__->belongs_to('on_body', 'Lacuna::DB::Result::Map::Body', 'on_body_id');
@@ -394,22 +398,44 @@ sub tick_all_spies {
     my $db = Lacuna->db;
     my $dtf = $db->storage->datetime_parser;
     my $spies = $db->resultset('Spies')
-                    ->search( { available_on  => { '<' => $dtf->format_datetime(DateTime->now) },
-                                task => { 'not in' => ['Idle',
-                                                       'Counter Espionage',
-                                                       'Mercenary Transport',
-                                                       'Prisoner Transport',
-                                                       'Intel Training',
-                                                       'Mayhem Training',
-                                                       'Politics Training',
-                                                       'Theft Training',
-                                                       'Political Propaganda'] },
-                              });
+                    ->search(
+                        {
+                          -or => [
+                                 -and => [
+                                          available_on  => { '<' => $dtf->format_datetime(DateTime->now) },
+                                          task => { 'not in' => [
+                                                      'Idle',
+                                                      'Counter Espionage',
+                                                      'Mercenary Transport',
+                                                      'Prisoner Transport',
+                                                      'Intel Training',
+                                                      'Mayhem Training',
+                                                      'Politics Training',
+                                                      'Theft Training',
+                                                      'Political Propaganda',
+                                                   ] },
+                                         ],
+                                 -and => [
+                                          started_assignment => { '<' => 
+                                              $dtf->format_datetime(DateTime->now->subtract(days => 2)) },
+                                          task => { 'in' => [
+                                                      'Intel Training',
+                                                      'Mayhem Training',
+                                                      'Politics Training',
+                                                      'Theft Training',
+                                                      'Political Propaganda',
+                                                   ] },
+                                         ],
+                                 ]
+                        });
 
     # TODO further efficiencies could be made by ignoring spies not yet 'available'
+    say "Number of spies selected: ".$spies->count;
     while (my $spy = $spies->next) {
         if ($verbose) {
-            say format_date(DateTime->now), " ", "Tick spy ".$spy->name." task ".$spy->task;
+            say format_date(DateTime->now), 
+                sprintf(" Tick Spy %s:%s %s Task: %s since %s",
+                        $spy->id, $spy->name, $spy->empire_id, $spy->task, format_date($spy->started_assignment));
         }
         my $starting_task = $spy->task;
         $spy->is_available;
@@ -504,7 +530,7 @@ sub is_available {
         if ($mission_count_add > 0) {
             my $remain_min = $minutes - ($mission_count_add * 360);
             $self->started_assignment($now->clone->subtract(minutes => $remain_min)); # Put time at now with remainder
-            my $fskill = $self->politics_xp + $mission_count_add;
+            my $fskill = $self->politics_xp + (10 * $mission_count_add);
             $fskill = 2600 if ($fskill > 2600);
             $self->politics_xp($fskill);
             $self->defense_mission_count( $self->defense_mission_count + $mission_count_add);
@@ -520,7 +546,12 @@ sub is_available {
     }
     elsif (time > $self->available_on->epoch) {
         if ($task eq 'Debriefing') {
-            $self->task('Counter Espionage');
+            if ($self->on_body->empire_id == $self->empire_id) {
+                $self->task('Counter Espionage');
+            }
+            else {
+                $self->task('Idle');
+            }
             $self->started_assignment(DateTime->now);
             $self->update;
             return 1;
@@ -545,12 +576,10 @@ sub is_available {
                     my $uni_level = $self->on_body->empire->university_level;
                     if ($self->on_body->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) {
                         $building = 'Module::PoliceStation';
-                        $uni_level = 30;  #This way, uni level doesn't matter with SS
                     }
                     my $gauntlet = $self->on_body->get_building_of_class('Lacuna::DB::Result::Building::'.$building);
                     if (defined $gauntlet) {
                         my $level = $gauntlet->effective_level;
-                        $level = $uni_level if ($level > $uni_level);
                         $seconds += int(3600 * (($level * 3 * $gauntlet->efficiency)/100 + 1));
                     }
 
@@ -631,7 +660,11 @@ my @class_failures = (
                      );
 
 sub assign {
-    my ($self, $assignment) = @_;
+    my ($self, $assignment_options) = @_;
+    $assignment_options = {
+        assignment => $assignment_options
+    } unless ref $assignment_options eq 'HASH';
+    my $assignment = $assignment_options->{assignment};
 
     my $is_available = $self->is_available;
 
@@ -702,7 +735,7 @@ sub assign {
         }
     }
     elsif ($assignment eq 'Security Sweep') {
-        return $self->run_security_sweep($mission);
+        return $self->run_security_sweep($mission, $assignment_options);
     }
     elsif ($assignment eq 'Bugout') {
         return $self->bugout($mission);
@@ -718,7 +751,10 @@ sub burn {
     my $body = $self->from_body;
     my $unhappy = int($self->level * 1000 * 200/75); # Not factoring in Deception, always costs this much happiness.
     $unhappy = 2000 if ($unhappy < 2000);
-    $body->spend_happiness($unhappy);
+
+    # need to save off the unhappy if the burned spy is PP on homeworld
+    # because uprising will load a separate object for the same row.
+    $body->spend_happiness($unhappy)->update;
     if ($self->task eq 'Political Propaganda') {
         $body->add_news(200, 'The government of %s made the mistake of trying to burn one of their own loyal propaganda ministers.', $old_empire->name);
         $self->on_body->propaganda_boost(0);
@@ -726,9 +762,8 @@ sub burn {
     }
     elsif ($body->add_news(25, 'This reporter has just learned that %s has a policy of burning its own loyal spies.', $old_empire->name)) {
 # If the media finds out, even more unhappy.
-        $body->spend_happiness(int($unhappy/2));
+        $body->spend_happiness(int($unhappy/2))->update;
     }
-    $body->update;
     if ($self->on_body->empire_id != $old_empire->id) {
         my $new_emp = $self->on_body->empire_id;
         my $new_int_min = $self->on_body->get_building_of_class('Lacuna::DB::Result::Building::Intelligence');
@@ -942,7 +977,7 @@ sub run_mission {
 }
 
 sub run_security_sweep {
-  my $self = shift;
+    my $self = shift;
 
   # calculate success, failure, or bounce
   my $mission_skill = 'intel_xp';
@@ -1973,6 +2008,9 @@ sub steal_planet {
                 $trade->withdraw;
         }
     }
+    # Remove all Excavator outposts from planet
+    Lacuna->db->resultset('Excavators')
+          ->search({planet_id => $self->on_body->id})->delete_all;
     # Remove Supply chains to and from planet
     foreach my $chain ($self->on_body->out_supply_chains) {
         $chain->delete;
@@ -1985,10 +2023,10 @@ sub steal_planet {
     Lacuna->db->resultset('Spies')->search({
         on_body_id => $self->on_body_id,
         task => { 'in' => [ 'Training',
-                                'Intel Training',
-                                'Mayhem Training',
-                                'Politics Training',
-                                'Theft Training'] },
+                            'Intel Training',
+                            'Mayhem Training',
+                            'Politics Training',
+                            'Theft Training'] },
     })->delete_all; # All spies in training are executed including those training in intel,mayhem,politics, and theft
 
     my $spies = Lacuna->db->resultset('Spies')
@@ -2016,6 +2054,15 @@ sub steal_planet {
                         available_on => DateTime->now->add(days => 30),
                        });
         }
+    }
+    $spies = Lacuna->db->resultset('Spies')
+                  ->search({on_body_id => $self->on_body_id,
+                            task => 'Counter Espionage'});
+    while (my $spy = $spies->next) {
+          $spy->update({
+                        task => 'Idle',
+                        started_assignment => DateTime->now,
+                       });
     }
 
     my $ships = Lacuna->db->resultset('Ships')
@@ -2332,7 +2379,7 @@ sub prevent_insurrection {
                                                            'Prisoner Transport'] },
                                     empire_id => { 'in' => \@member_ids },
                                   },
-                                  { order_by => 'level', 'rand()' });
+                                  { order_by => [ 'level', 'rand()'] });
     my $max_cnt = $defender->level;
     $max_cnt = ($max_cnt < 3) ? 3 : $max_cnt;
     my $count = randint(3,$max_cnt);
@@ -3428,7 +3475,8 @@ sub surface_report {
 }
 
 sub spy_report {
-    my ($self, $defender) = @_;
+    my ($self, $defender, $assignment_options) = @_;
+    $assignment_options ||= {};
     my @peeps = (['Name','From','Assignment','Level']);
     my %planets = ( $self->on_body->id => $self->on_body->name );
     my $spies = Lacuna->db
@@ -3443,21 +3491,26 @@ sub spy_report {
         }
         push @peeps, [$spook->name, $planets{$spook->from_body_id}, $spook->task, $spook->level];
     }
-    unless (scalar @peeps > 1) {
-        $peeps[0] = ["No", "Enemy", "Spies", "Found" ];
+    if (@peeps <= 1 and $assignment_options->{noempty}) {
+        return;
+    } else {
+        unless (scalar @peeps > 1) {
+            $peeps[0] = ["No", "Enemy", "Spies", "Found" ];
+        }
+        my $title = sprintf "Spy Report (%d)", $#peeps;
+        return $self->empire->send_predefined_message(
+            tags        => ['Intelligence'],
+            filename    => 'intel_report.txt',
+            params      => [$title,
+                            $self->on_body->x,
+                            $self->on_body->y,
+                            $self->on_body->name,
+                            $self->name,
+                            $self->from_body->id,
+                            $self->from_body->name],
+            attachments=> { table => \@peeps},
+        )->id;
     }
-    return $self->empire->send_predefined_message(
-        tags        => ['Intelligence'],
-        filename    => 'intel_report.txt',
-        params      => ['Spy Report',
-                        $self->on_body->x,
-                        $self->on_body->y,
-                        $self->on_body->name,
-                        $self->name,
-                        $self->from_body->id,
-                        $self->from_body->name],
-        attachments=> { table => \@peeps},
-    )->id;
 }
 
 sub economic_report {

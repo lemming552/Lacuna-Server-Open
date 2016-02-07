@@ -15,8 +15,9 @@ sub model_class {
 
 sub view_foreign_spies {
     my ($self, $session_id, $building_id, $page_number) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $page_number ||= 1;
     my @out;
     my $spies = $building->foreign_spies->search(undef,
@@ -36,7 +37,7 @@ sub view_foreign_spies {
         };
     }
     return {
-        status                  => $self->format_status($empire, $building->body),
+        status                  => $self->format_status($session, $building->body),
         spies                   => \@out,
         spy_count               => $spies->pager->total_entries,
     };
@@ -44,8 +45,9 @@ sub view_foreign_spies {
 
 sub execute_prisoner {
     my ($self, $session_id, $building_id, $prisoner_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $prisoner = $building->prisoners->find($prisoner_id);
     unless (defined $prisoner) {
         confess [1002,'Could not find that prisoner.'];
@@ -64,14 +66,15 @@ sub execute_prisoner {
     );
     $prisoner->delete;
     return {
-        status                  => $self->format_status($empire, $body),
+        status                  => $self->format_status($session, $body),
     }
 }
 
 sub release_prisoner {
     my ($self, $session_id, $building_id, $prisoner_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $prisoner = $building->prisoners->find($prisoner_id);
     unless (defined $prisoner) {
         confess [1002,'Could not find that prisoner.'];
@@ -89,14 +92,15 @@ sub release_prisoner {
         params      => [$empire->id, $empire->name, $body->x, $body->y, $body->name, $prisoner->name, $prisoner->from_body->id, $prisoner->from_body->name],
     );
     return {
-        status                  => $self->format_status($empire, $body),
+        status                  => $self->format_status($session, $body),
     }
 }
 
 sub view_prisoners {
     my ($self, $session_id, $building_id, $page_number) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $page_number ||= 1;
     my @out;
     my $spies = $building->prisoners->search(undef,
@@ -117,7 +121,7 @@ sub view_prisoners {
         };
     }
     return {
-        status                  => $self->format_status($empire, $building->body),
+        status                  => $self->format_status($session, $building->body),
         prisoners               => \@out,
         captured_count          => $spies->pager->total_entries,
     };

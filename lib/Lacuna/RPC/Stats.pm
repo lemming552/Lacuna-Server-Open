@@ -23,7 +23,8 @@ sub credits {
 
 sub alliance_rank {
     my ($self, $session_id, $by, $page_number) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     unless ($by ~~ [qw(influence population average_empire_size_rank offense_success_rate_rank defense_success_rate_rank dirtiest_rank)]) {
         $by = 'influence desc,population desc';
     }
@@ -65,7 +66,7 @@ sub alliance_rank {
         };
     }
     return {
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
         alliances => \@alliances,
         total_alliances => $ranks->pager->total_entries,
         page_number => $page_number,
@@ -80,7 +81,8 @@ sub find_alliance_rank {
     unless ($by ~~ [qw(average_empire_size_rank offense_success_rate_rank defense_success_rate_rank dirtiest_rank)]) {
         $by = 'average_empire_size_rank';
     }
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $ranks = Lacuna->db->resultset('Lacuna::DB::Result::Log::Alliance')->search(undef,{order_by => $by, rows=>25});
     my $ranked = $ranks->search({alliance_name => { like => $alliance_name.'%'}});
     my @alliances;
@@ -96,14 +98,15 @@ sub find_alliance_rank {
         };
     }
     return {
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
         alliances => \@alliances,
     };
 }
 
 sub empire_rank {
     my ($self, $session_id, $by, $page_number) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     unless ($by ~~ [qw(empire_size_rank offense_success_rate_rank defense_success_rate_rank dirtiest_rank)]) {
         $by = 'empire_size_rank';
     }
@@ -139,7 +142,7 @@ sub empire_rank {
         };
     }
     return {
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
         empires => \@empires,
         total_empires => $ranks->pager->total_entries,
         page_number => $page_number,
@@ -154,7 +157,8 @@ sub find_empire_rank {
     unless ($by ~~ [qw(empire_size_rank offense_success_rate_rank defense_success_rate_rank dirtiest_rank)]) {
         $by = 'empire_size_rank';
     }
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $ranks = Lacuna->db->resultset('Lacuna::DB::Result::Log::Empire')->search(undef,{order_by => $by, rows=>25});
     my $ranked = $ranks->search({empire_name => { like => $empire_name.'%'}});
     my @empires;
@@ -170,14 +174,15 @@ sub find_empire_rank {
         };
     }
     return {
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
         empires => \@empires,
     };
 }
 
 sub colony_rank {
     my ($self, $session_id, $by) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     unless ($by ~~ [qw(population_rank)]) {
         $by = 'population_rank';
     }
@@ -196,14 +201,15 @@ sub colony_rank {
         }
     }
     return {
-        status      => $self->format_status($empire),
+        status      => $self->format_status($session),
         colonies    => \@colonies,
     };
 }
 
 sub spy_rank {
     my ($self, $session_id, $by) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     unless ($by ~~ [qw(level_rank success_rate_rank dirtiest_rank)]) {
         $by = 'level_rank';
     }
@@ -225,14 +231,15 @@ sub spy_rank {
         }
     }
     return {
-        status      => $self->format_status($empire),
+        status      => $self->format_status($session),
         spies       => \@spies,
     };
 }
     
 sub weekly_medal_winners {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $winner_rs = Lacuna->db->resultset('Lacuna::DB::Result::Log::WeeklyMedalWinner')->search;
     my @winners;
     while (my $winner = $winner_rs->next) {
@@ -245,7 +252,7 @@ sub weekly_medal_winners {
         }
     }
     return {
-        status      => $self->format_status($empire),
+        status      => $self->format_status($session),
         winners       => \@winners,
     };
 }

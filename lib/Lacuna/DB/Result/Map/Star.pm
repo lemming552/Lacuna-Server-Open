@@ -18,6 +18,20 @@ __PACKAGE__->has_many('bodies', 'Lacuna::DB::Result::Map::Body', 'star_id');
 __PACKAGE__->has_many('probes', 'Lacuna::DB::Result::Probes', 'star_id');
 __PACKAGE__->has_many('laws', 'Lacuna::DB::Result::Laws', 'star_id');
 __PACKAGE__->belongs_to('station', 'Lacuna::DB::Result::Map::Body', 'station_id', { on_delete => 'set null' });
+__PACKAGE__->has_many('bhgneut_laws', 'Lacuna::DB::Result::Laws', sub {
+    my $args = shift;
+    return (
+            {
+                "$args->{foreign_alias}.station_id" => { -ident => "$args->{self_alias}.station_id" },
+                "$args->{foreign_alias}.type" => 'BHGNeutralized',
+            },
+            $args->{self_rowobj} && {
+                "$args->foreign_alias}.station_id" => $args->{self_rowobj}->station_id,
+                "$args->{foreign_alias}.type" => 'BHGNeutralized',
+            }
+           )
+});
+
 
 sub sqlt_deploy_hook {
     my ($self, $sqlt_table) = @_;
@@ -146,7 +160,20 @@ sub recalc_influence {
         {
             # and now we have to figure out which station of
             # the winner's alliance is the strongest.
-            my $row = $rs->with_currentinfluence->find({ star_id => $self->id, alliance_id => $best->alliance_id },{order_by => {-desc => 'currentinfluence'}, rows => 1});
+            my $row = $rs->with_currentinfluence->
+                find(
+                     {
+                         star_id => $self->id,
+                         alliance_id => $best->alliance_id
+                     },{
+                         order_by => [
+                                      {-desc => 'currentinfluence'},
+                                      # if the influence is the same, go with
+                                      # the one that is older.
+                                      {-asc => 'oldstart'},
+                                     ],
+                         rows => 1,
+                     });
             $station_id = $row->station_id;
         }
         else

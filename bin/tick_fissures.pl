@@ -418,7 +418,7 @@ sub fissure_explode {
             $to_grab_mass->empire->send_predefined_message(
                 tags        => ['Fissure','Colonization','Alert'],
                 filename    => 'changed_size.txt',
-                params      => [$to_grab_mass->name, $size, $new_size],
+                params      => [$to_grab_mass->x, $to_grab_mass->y, $to_grab_mass->name, $size, $new_size],
             );
         }
         last GASSY if (++$grown >= 5);
@@ -487,7 +487,7 @@ sub fissure_explode {
 
         my $outrage;
         if ($ename) {
-            $outrage = sprintf("We currently investigating why %s let this happen to their people.", $ename);
+            $outrage = sprintf("We are currently investigating why %s let this happen to their people.", $ename);
         }
         else {
             $outrage = "Local empires are investigating who is responsible for this outrage."

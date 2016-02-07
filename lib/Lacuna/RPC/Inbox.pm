@@ -8,18 +8,50 @@ use DateTime;
 use Lacuna::Verify;
 use Lacuna::Util qw(format_date);
 use List::Util qw(none);
+use PerlX::Maybe qw(provided);
+use Time::HiRes qw(usleep);
+
+# This function basically handles all the "or baby" logic for
+# messages.  Can be further refined by the caller with extra ->search
+# calls, but this should keep any caller from accidentally reaching
+# messages it shouldn't be able to.
+
+# options:
+#  * from => false if from real empire is not to be looked at.
+sub messages_rs {
+    my ($self, $session, $message_ids, %opts) = @_;
+
+    # build a list of filters to OR together.
+    my @or  = { 'me.to_id'   => $session->empire->id };
+    push @or, { 'me.from_id' => $session->empire->id } if
+        not exists $opts{from} or $opts{from};
+    push @or, {
+        'sitterauths.sitter_id' => $session->empire->id,
+        'sitterauths.expiry' => { '>=' => \q[UTC_TIMESTAMP()] },
+        'me.tag' => { '!=' => 'Correspondence' },
+    } unless $session->_is_sitter;
+
+    my $message = Lacuna->db->resultset('Message')->
+        search(
+               {
+                   provided $message_ids, 'me.id' => { -in => $message_ids },
+                   -or => \@or,
+               },
+               {
+                   join => { receiver => 'sitterauths' },
+                   prefetch => 'receiver',
+               }
+              );
+
+    return $message;
+}
 
 
 sub read_message {
     my ($self, $session_id, $message_id) = @_;
-    my $message = Lacuna->db->resultset('Lacuna::DB::Result::Message')->find($message_id);
-    unless (defined $message) {
-        confess [1002, 'Message does not exist.', $message_id];
-    }
-    my $empire = $self->get_empire_by_session($session_id);
-    unless ($empire->id ~~ [$message->from_id, $message->to_id]) {
-        confess [1010, "You can't read a message that isn't yours.", $message_id];
-    }
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
+    my $message  = $self->messages_rs($session, $message_id)->first;
     if ($empire->id eq $message->to_id && !$message->has_read) {
         $message->has_read(1);
         $message->update;
@@ -42,18 +74,17 @@ sub read_message {
             tags        => [$message->tag],
             attachments => $message->attachments,
         },
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
     };
 }
 
 sub archive_messages {
     my ($self, $session_id, $message_ids) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $messages = Lacuna->db->resultset('Lacuna::DB::Result::Message')
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
+    my $messages = $self->messages_rs($session, $message_ids, from => 0)
         ->search(
                  {
-                     id => [ 'in', $message_ids ],
-                     to_id => $empire->id,
                      has_archived => 0,
                  });
 
@@ -69,38 +100,49 @@ sub archive_messages {
         $empire->recalc_messages;
     }
 
-    return { success=>\@updating, status=>$self->format_status($empire) };
+    return { success=>\@updating, status=>$self->format_status($session) };
 }
 
 sub trash_messages {
     my ($self, $session_id, $message_ids) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $messages = Lacuna->db->resultset('Lacuna::DB::Result::Message')
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
+    my $messages = $self->messages_rs($session, $message_ids, from => 0)
         ->search(
                  {
-                     id => [ 'in', $message_ids ],
-                     to_id => $empire->id,
                      has_trashed => 0,
                  });
 
-    my @updating = map { $_->id } $messages->search(undef, { columns => [ 'id' ]})->all;
+    my @updating = $messages->get_column('id')->all;
     if (@updating)
     {
-        $messages->update(
-                          {
-                              has_read => 1,
-                              has_archived => 0,
-                              has_trashed => 1,
-                          });
+        my $updated;
+        for (1..3) {
+            # Sometimes there's a deadlock here, so we'll just retry it
+            # a few times if it fails.
+            last if eval {
+                $messages->update(
+                                  {
+                                      has_read => 1,
+                                      has_archived => 0,
+                                      has_trashed => 1,
+                                  });
+                $updated = 1; };
+
+            # on failure, give it a tiny bit of time for a retry.
+            usleep 250;
+        }
+        @updating = () unless $updated;
         $empire->recalc_messages;
     }
 
-    return { success=>\@updating, status=>$self->format_status($empire) };
+    return { success=>\@updating, status=>$self->format_status($session) };
 }
 
 sub trash_messages_where {
     my ($self, $session_id, $opts) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     if (!$opts->{spec})
     {
         $opts = { spec => [ @_[2..$#_] ] };
@@ -122,6 +164,8 @@ sub trash_messages_where {
         $where{tag}       = $spec->{tags}     if $spec->{tags} &&  ref $spec->{tags} eq 'ARRAY';
         $where{tag}     ||= $spec->{tag}      if $spec->{tag}  && !ref $spec->{tag};
         $where{from_name} = [ $spec->{from} ] if $spec->{from} && !ref $spec->{from};
+        $where{to_id} = $empire->id       unless $spec->{all_babies};
+        $where{to_id} = $spec->{empire_id} if $spec->{empire_id} and (!ref $spec->{empire_id} or none { ref $_ } @{$spec->{empire_id}});
 
         if ($spec->{subject})
         {
@@ -160,16 +204,15 @@ sub trash_messages_where {
 
         # the parts the caller can't override:
         $where{has_archived} = 0;
-        $where{to_id}        = $empire->id;
         $where{has_trashed}  = 0; # only look at ones not already trashed
 
-        my $messages = Lacuna->db->resultset('Lacuna::DB::Result::Message')->search(\%where);
+        my $messages = $self->messages_rs($session, undef, from => 0)->search(\%where);
 
         # check if we have anything to delete
         my $count;
         if ($opts->{save_ids})
         {
-            my @deleting = map { $_->id } $messages->search(undef, { columns => [ 'id' ] })->all;
+            my @deleting = $messages->get_column('id')->all;
             if (@deleting)
             {
                 $count = @deleting;
@@ -184,18 +227,29 @@ sub trash_messages_where {
         # delete it
         if ($count)
         {
-            $return{deleted_count} += $count;
-            $messages->update(
-                              {
-                                  has_read => 1,
-                                  has_trashed => 1,
-                              });
+
+            for (1..3) {
+                # Sometimes there's a deadlock here, so we'll just retry it
+                # a few times if it fails.
+                last if eval {
+                    $messages->update(
+                                      {
+                                          has_read => 1,
+                                          has_trashed => 1,
+                                      });
+                    $return{deleted_count} += $count;
+
+                    1; };
+
+                # on failure, give it a tiny bit of time for a retry.
+                usleep 250;
+            }
         }
     }
 
     $empire->recalc_messages if $return{deleted_count};
 
-    $return{status} = $self->format_status($empire);
+    $return{status} = $self->format_status($session);
     return \%return;
 }
 
@@ -206,7 +260,8 @@ sub send_message {
     Lacuna::Verify->new(content=>\$subject, throws=>[1005,'Message subject must be less than 100 characters.',$subject])->length_lt(100);
     Lacuna::Verify->new(content=>\$body, throws=>[1005,'Message body cannot be empty.',$body])->not_empty;
     Lacuna::Verify->new(content=>\$body, throws=>[1005,'Message body cannot contain HTML tags or entities.',$body])->no_tags;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     if ($options->{in_reply_to}) {
         my $reply_to = Lacuna->db->resultset('Lacuna::DB::Result::Message')->find($options->{in_reply_to});
         unless ($empire->id ~~ [$reply_to->to_id, $reply_to->from_id]) {
@@ -280,83 +335,109 @@ sub send_message {
             sent    => \@sent,
             unknown => \@unknown,
         },
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
     };
 }
 
 sub view_inbox {
     my $self = shift;
     my $session_id = shift;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
+    my $options  = shift || {};
     my $where = {
         has_archived    => 0,
         has_trashed     => 0,
         to_id           => $empire->id,
     };
-    return $self->view_messages($where, $empire, @_);
+    if (!$session->_is_sitter && $options->{empire} &&
+        $options->{empire} ne $empire->name &&
+        $options->{empire} ne $empire->id) {
+
+        my $to_empire = $empire->babies->
+            search([ { name => $options->{empire} }, { id => $options->{empire} } ])->first;
+
+        confess [ 1002, "The empire $options->{empire} is not one of the empires you can sit for", $options->{empire} ]
+            unless $empire;
+
+        $where->{to_id} = $to_empire->id;
+
+        # can't view correspondence of baby empires.
+        #$where->{tag} = { '!=', 'Correspondence' };
+        #if ($options->{tags}) {
+        #    @{$options->{tags}} = grep !/Correspondence/i, @{$options->{tags}};
+        #    delete $options->{tags} unless @{$options->{tags}};
+        #}
+    }
+    return $self->view_messages($where, $session, $empire, $options, @_);
 }
 
 sub view_archived {
     my $self = shift;
     my $session_id = shift;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $where = {
         has_archived    => 1,
         has_trashed     => 0,
         to_id           => $empire->id,
     };
-    return $self->view_messages($where, $empire, @_);
+    return $self->view_messages($where, $session, $empire, @_);
 }
 
 sub view_trashed {
     my $self = shift;
     my $session_id = shift;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $where = {
         has_archived    => 0,
         has_trashed     => 1,
         to_id           => $empire->id,
     };
-    return $self->view_messages($where, $empire, @_);
+    return $self->view_messages($where, $session, $empire, @_);
 }
 
 sub view_sent {
     my $self = shift;
     my $session_id = shift;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $where = {
         from_id         => $empire->id,
         to_id           => {'!=' => $empire->id},
     };
-    return $self->view_messages($where, $empire, @_);
+    return $self->view_messages($where, $session, $empire, @_);
 }
 
 sub view_unread {
     my $self = shift;
     my $session_id = shift;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
     my $where = {
         has_archived    => 0,
         has_read        => 0,
         to_id           => $empire->id,
     };
-    return $self->view_messages($where, $empire, @_);
+    return $self->view_messages($where, $session, $empire, @_);
 }
 
 sub view_messages {
-    my ($self, $where, $empire, $options) = @_;
+    my ($self, $where, $session, $empire, $options) = @_;
     $options->{page_number} ||= 1;
     if ($options->{tags}) {
         $where->{tag} = ['in',$options->{tags}];
     }
-    my $messages = Lacuna->db->resultset('Lacuna::DB::Result::Message')->search(
-        $where,
-        {
-            order_by    => { -desc => 'date_sent' },
-            rows        => 25,
-            page        => $options->{page_number},
-        }
-    );
+    my $messages = $self->messages_rs($empire->current_session, undef)->
+        search(
+               $where,
+               {
+                   order_by    => [{ -desc => 'date_sent' },'me.id'],
+                   rows        => 25,
+                   page        => $options->{page_number},
+               }
+        );
     my @box;
     while (my $message = $messages->next) {
         push @box, {
@@ -376,7 +457,7 @@ sub view_messages {
     return {
         messages        => \@box,
         message_count   => $messages->pager->total_entries,
-        status          => $self->format_status($empire),
+        status          => $self->format_status($session),
     };
 }
 

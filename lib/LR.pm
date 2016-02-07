@@ -31,7 +31,33 @@ sub _clean(@)
     [
      map {
          if (blessed $_) {
-             eval { $_->id } || ref $_
+             if (ref =~ /Exception/)
+             {
+                 $_
+             }
+             else
+             {
+                 eval { $_->id } || ref $_
+             }
+         } elsif (ref $_ eq 'HASH') {
+             my $x = $_;
+             +{
+                 map {
+                     my $o = $x->{$_};
+                     if (eval { $o->can('id') })
+                     {
+                         $_ => $o->id;
+                     }
+                     elsif ((ref $o) =~ /^Lacuna/)
+                     {
+                         $_ => ref $o;
+                     }
+                     else
+                     {
+                         $_ => $o;
+                     }
+                 } keys %$x
+             }
          } else {
              $_
          }
@@ -48,7 +74,7 @@ sub _session
         $session = $_[0]->start_session;
         $_[0] = $session->id;
     }
-    if (ref $_[0] eq 'HASH' && exists $_[0]->{session_id} && ref $_[0]->{session_id})
+    if (ref $_[0] eq 'HASH' && exists $_[0]->{session_id} && ref $_[0]->{session_id} eq 'Lacuna::DB::Result::Empire')
     {
         # create a session for it.
         $session = $_[0]->{session_id}->start_session;
@@ -74,7 +100,7 @@ sub call
     Data::Dump::dd(_clean @_);
     my $rc = eval { $type->new->$method(_session @_) } || $@;
     print "RESULT: ";
-    Data::Dump::dd($rc);
+    Data::Dump::dd(_clean $rc);
 }
 
 sub jcall

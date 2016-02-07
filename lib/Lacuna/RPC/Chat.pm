@@ -12,7 +12,8 @@ use Ouch;
 sub init_chat {
     my ($self, $session_id) = @_;
 
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id });
+    my $empire   = $session->current_empire;
 
     my $config = Lacuna->config;
     my $firebase_config = $config->get('firebase');
@@ -99,7 +100,7 @@ sub init_chat {
         rating  => 'g',
 	);
     my $ret = {
-        status          => $self->format_status($empire),
+        status          => $self->format_status($session),
         gravatar_url    => $gravatar_url,
         chat_name       => $chat_name,
         chat_auth       => $chat_auth->create_token,

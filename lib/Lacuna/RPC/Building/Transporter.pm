@@ -18,17 +18,66 @@ sub model_class {
 
 around 'view' => sub {
     my ($orig, $self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id, skip_offline => 1);
-    my $out = $orig->($self, $empire, $building);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+
+    my $out = $orig->($self, $session, $building);
+
+    my $bodies = Lacuna->db->resultset('Map::Body')->
+        search(
+               {
+                   'me.id' => { '!=' => $session->current_body->id },
+                   'me.empire_id' => $empire->id,
+                   # can only push to other SSTs, that are finished building
+                   # and aren't completely broken down.
+                   '_buildings.class' => 'Lacuna::DB::Result::Building::Transporter',
+                   '_buildings.level'      => { '>' => 0 },
+                   '_buildings.efficiency' => { '>' => 0 },
+               },
+               {
+                   join => '_buildings',
+                   order_by => 'me.name',
+                   '+select' => {count => '_buildings.id'},
+                   '+as' => 'count_sst',
+                   group_by => 'me.id',
+                   having => { 'count(_buildings.id)' => { '>' => 0 } }
+               }
+              );
+
+    # ok, so, technically, stations can't have an SST.  Currently.
+    # but if we have one, and put it in the above, then this
+    # will handle it.  The code is shared with Trade.pm
+    my (@colonies,@stations);
+
+    while (my $body = $bodies->next)
+    {
+        next if $body->id == $session->current_body->id;
+
+        my $info = {
+            name => $body->name,
+            id   => $body->id,
+            x    => $body->x,
+            y    => $body->y, #,,,
+            zone => $body->zone,
+        };
+        if ($body->get_type eq 'space station') {
+            push @stations, $info;
+        }
+        else {
+            push @colonies, $info;
+        }
+    }
+    $out->{transport}{pushable} = [ @colonies, @stations ];
     $out->{transport}{max} = $building->determine_available_cargo_space;
     return $out;
 };
 
 sub push_items {
     my ($self, $session_id, $building_id, $target_id, $items) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id});
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a transporter that has not yet been built.'] unless $building->effective_level > 0;
     my $cache = Lacuna->cache;
     if (! $cache->add('trade_add_lock', $building_id, 1, 5)) {
@@ -61,14 +110,15 @@ sub push_items {
     });
     $empire->update; # has to go after due to validation in push_goods
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 
 sub add_to_market {
     my ($self, $session_id, $building_id, $offer, $ask) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a transporter that has not yet been built.'] unless $building->effective_level > 0;
     my $cache = Lacuna->cache;
     if (! $cache->add('trade_add_lock', $building_id, 1, 5)) {
@@ -88,7 +138,7 @@ sub add_to_market {
     $empire->update;
     return {
         trade_id    => $trade->id,
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 
@@ -101,15 +151,16 @@ sub withdraw_from_market {
     if (! $cache->add('trade_lock', $trade_id, 1, 5)) {
         confess [1013, 'A buyer has placed an offer on this trade. Please wait a few moments and try again.'];
     }
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $trade = $building->market->find($trade_id);
     unless (defined $trade) {
         confess [1002, 'Could not find that trade. Perhaps it has already been accepted.'];
     }
     $trade->withdraw($building->body);
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 
@@ -126,8 +177,9 @@ sub accept_from_market {
         $cache->delete('trade_lock',$trade_id);
     };
 
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a transporter that has not yet been built.'] unless $building->effective_level > 0;
 
     $empire->current_session->check_captcha;
@@ -172,19 +224,20 @@ sub accept_from_market {
     $body->update;
     $trade->body->update;
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 
 
 sub trade_one_for_one {
     my ($self, $session_id, $building_id, $have, $want, $quantity) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a transporter that has not yet been built.'] unless $building->effective_level > 0;
     $building->trade_one_for_one($have, $want, $quantity);
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 

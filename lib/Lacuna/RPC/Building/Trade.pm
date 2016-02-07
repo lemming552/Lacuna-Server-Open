@@ -19,10 +19,57 @@ sub model_class {
     return 'Lacuna::DB::Result::Building::Trade';
 }
 
+around 'view' => sub {
+    my ($orig, $self, $session_id, $building_id) = @_;
+
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+
+    my $out = $orig->($self, $session, $building);
+
+    my $bodies = Lacuna->db->resultset('Map::Body')->
+        search(
+               {
+                   # if we add this in, mysql gets really confused and slow.
+                   #'me.id' => { '!=' => $session->current_body->id },
+                   -or => [
+                           {  'me.empire_id'   => $empire->id },
+                           ({ 'me.alliance_id' => $empire->alliance_id }) x!! $empire->alliance_id,
+                          ]
+               }, { order_by => 'me.name' }
+              );
+
+    my (@colonies,@stations);
+
+    while (my $body = $bodies->next)
+    {
+        next if $body->id == $session->current_body->id;
+
+        my $info = {
+            name => $body->name,
+            id   => $body->id,
+            x    => $body->x,
+            y    => $body->y, #,,,
+            zone => $body->zone,
+        };
+        if ($body->get_type eq 'space station') {
+            push @stations, $info;
+        }
+        else {
+            push @colonies, $info;
+        }
+    }
+    $out->{transport}{pushable} = [ @colonies, @stations ];
+
+    return $out;
+};
+
 sub get_trade_ships {
     my ($self, $session_id, $building_id, $target_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $target = Lacuna->db->resultset('Lacuna::DB::Result::Map::Body')->find($target_id) if $target_id;
     my @ships;
     my $ships = $building->trade_ships;
@@ -31,15 +78,16 @@ sub get_trade_ships {
         push @ships, $ship->get_status($target);
     }
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
         ships       => \@ships,
     };
 }
 
 sub add_supply_ship_to_fleet {
     my ($self, $session_id, $building_id, $ship_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless (defined $building) {
         confess [1002, "Building not found."];
     }
@@ -66,14 +114,15 @@ sub add_supply_ship_to_fleet {
     }
     $building->add_supply_ship($ship);
     return {
-        status  =>$self->format_status($empire, $building->body),
+        status  =>$self->format_status($session, $building->body),
     };
 }
 
 sub add_waste_ship_to_fleet {
     my ($self, $session_id, $building_id, $ship_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless (defined $building) {
         confess [1002, "Building not found."];
     }
@@ -100,14 +149,15 @@ sub add_waste_ship_to_fleet {
     }
     $building->add_waste_ship($ship);
     return {
-        status  =>$self->format_status($empire, $building->body),
+        status  =>$self->format_status($session, $building->body),
     };
 }
 
 sub remove_supply_ship_from_fleet {
     my ($self, $session_id, $building_id, $ship_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless (defined $building) {
         confess [1002, "Building not found."];
     }
@@ -132,14 +182,15 @@ sub remove_supply_ship_from_fleet {
         $ship->land->update;
     }
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     };
 }
 
 sub remove_waste_ship_from_fleet {
     my ($self, $session_id, $building_id, $ship_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless (defined $building) {
         confess [1002, "Building not found."];
     }
@@ -164,15 +215,16 @@ sub remove_waste_ship_from_fleet {
         $ship->land->update;
     }
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     };
 }
 
 sub get_supply_ships {
     my ($self, $session_id, $building_id) = @_;
 
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
 
     my @ships;
     my $ships       = $building->all_supply_ships;
@@ -180,15 +232,16 @@ sub get_supply_ships {
         push @ships, $ship->get_status;
     }
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
         ships       => \@ships,
     };
 }
 
 sub get_waste_ships {
     my ($self, $session_id, $building_id) = @_;
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body        = $building->body;
     # get the local star
     my $target      = Lacuna->db->resultset('Lacuna::DB::Result::Map::Star')->find($body->star_id);
@@ -198,15 +251,16 @@ sub get_waste_ships {
         push @ships, $ship->get_status($target);
     }
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
         ships       => \@ships,
     };
 }
 
 sub view_supply_chains {
     my ($self, $session_id, $building_id) = @_;
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($building) {
         confess [1002, "Cannot find that building."];
     }
@@ -218,7 +272,7 @@ sub view_supply_chains {
         push @supply_chains, $chain->get_status;
     }
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         supply_chains  => \@supply_chains,
         max_supply_chains => $max_chains,
     };
@@ -227,18 +281,16 @@ sub view_supply_chains {
 
 sub view_waste_chains {
     my ($self, $session_id, $building_id) = @_;
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
-    unless ($building) {
-        confess [1002, "Cannot find that building."];
-    }
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @waste_chains;
     my $chains      = $building->waste_chains;
     while (my $waste_push = $chains->next) {
         push @waste_chains, $waste_push->get_status;
     }
     return {
-        status          => $self->format_status($empire, $building->body),
+        status          => $self->format_status($session, $building->body),
         waste_chain     => \@waste_chains,
     };
 }
@@ -246,11 +298,9 @@ sub view_waste_chains {
 sub delete_supply_chain {
     my ($self, $session_id, $building_id, $supply_chain_id) = @_;
 
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
-    unless ($building) {
-        confess [1002, "Cannot find that building."];
-    }
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
 
     my $chain = Lacuna->db->resultset('Lacuna::DB::Result::SupplyChain')->find($supply_chain_id);
     if ($chain) {
@@ -262,15 +312,9 @@ sub delete_supply_chain {
 sub create_supply_chain {
     my ($self, $session_id, $building_id, $target_id, $resource_type, $resource_hour) = @_;
 
-    my $empire      = $self->get_empire_by_session($session_id);
-    unless (defined $building_id) {
-        confess [1002, "You must specify a building."];
-    }
-
-    my $building    = $self->get_building($empire, $building_id);
-    unless ($building) {
-        confess [1002, "Cannot find that building."];
-    }
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body        = $building->body;
     my $max_chains = $building->effective_level * 3;
     if ($body->out_supply_chains->count >= $max_chains) {
@@ -323,11 +367,9 @@ sub create_supply_chain {
 
 sub update_supply_chain {
     my ($self, $session_id, $building_id, $supply_chain_id, $resource_type, $resource_hour) = @_;
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
-    unless ($building) {
-        confess [1002, "Cannot find that building."];
-    }
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body        = $building->body;
     unless ($supply_chain_id) {
         confess [1002, "You must specify a supply chain id."];
@@ -355,16 +397,14 @@ sub update_supply_chain {
 
 sub update_waste_chain {
     my ($self, $session_id, $building_id, $waste_chain_id, $waste_hour) = @_;
-    my $empire      = $self->get_empire_by_session($session_id);
-    my $building    = $self->get_building($empire, $building_id);
-    unless ($building) {
-        confess [1002, "Cannot find that building."];
-    }
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $body        = $building->body;
     unless ($waste_chain_id) {
         confess [1002, "You must specify a waste chain id."];
     }
-    unless (defined $waste_hour) {
+    unless (defined $waste_hour && length $waste_hour) {
         confess [1002, "You must specify an amount for waste_hour."];
     }
     unless ($waste_hour >= 0) {
@@ -385,8 +425,9 @@ sub update_waste_chain {
 
 sub push_items {
     my ($self, $session_id, $building_id, $target_id, $items, $options) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a trade ministry that has not yet been built.'] unless $building->effective_level > 0;
     my $cache = Lacuna->cache;
     if (! $cache->add('trade_add_lock', $building_id, 1, 5)) {
@@ -429,7 +470,7 @@ sub push_items {
     }
     my $ship = $building->push_items($target, $items, $options);
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
         ship        => $ship->get_status,
     };
 }
@@ -443,15 +484,16 @@ sub withdraw_from_market {
     if (! $cache->add('trade_lock', $trade_id, 1, 5)) {
         confess [1013, 'A buyer has placed an offer on this trade. Please wait a few moments and try again.'];
     }
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
-    my $trade = $building->market->find($trade_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $trade = $building->my_market->find($trade_id);
     unless (defined $trade) {
         confess [1002, 'Could not find that trade. Perhaps it has already been accepted.'];
     }
     $trade->withdraw($building->body);
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 
@@ -469,8 +511,9 @@ sub accept_from_market {
         $cache->delete('trade_lock',$trade_id);
     };
 
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a trade ministry that has not yet been built.'] unless $building->effective_level > 0;
 
     $empire->current_session->check_captcha;
@@ -515,14 +558,15 @@ sub accept_from_market {
     $trade->delete;
 
     return {
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 
 sub add_to_market {
     my ($self, $session_id, $building_id, $offer, $ask, $options) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     confess [1013, 'You cannot use a trade ministry that has not yet been built.'] unless $building->effective_level > 0;
     my $cache = Lacuna->cache;
     if (! $cache->add('trade_add_lock', $building_id, 1, 5)) {
@@ -534,7 +578,7 @@ sub add_to_market {
     my $trade = $building->add_to_market($offer, $ask, $options);
     return {
         trade_id    => $trade->id,
-        status      => $self->format_status($empire, $building->body),
+        status      => $self->format_status($session, $building->body),
     };
 }
 

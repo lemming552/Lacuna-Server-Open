@@ -258,22 +258,9 @@ sub sanitize {
     my ($self) = @_;
     my @buildings = grep {$_->class !~ /Permanent/} @{$self->building_cache};
     $self->delete_buildings(\@buildings);
-    my @attributes = qw( happiness_hour happiness waste_hour waste_stored waste_capacity
-        energy_hour energy_stored energy_capacity water_hour water_stored water_capacity ore_capacity
-        rutile_stored chromite_stored chalcopyrite_stored galena_stored gold_stored uraninite_stored bauxite_stored
-        goethite_stored halite_stored gypsum_stored trona_stored kerogen_stored methane_stored anthracite_stored
-        sulfur_stored zircon_stored monazite_stored fluorite_stored beryl_stored magnetite_stored 
-        food_capacity food_consumption_hour lapis_production_hour potato_production_hour apple_production_hour
-        root_production_hour corn_production_hour cider_production_hour wheat_production_hour bread_production_hour
-        soup_production_hour chip_production_hour pie_production_hour pancake_production_hour milk_production_hour
-        meal_production_hour algae_production_hour syrup_production_hour fungus_production_hour burger_production_hour
-        shake_production_hour beetle_production_hour lapis_stored potato_stored apple_stored root_stored corn_stored
-        cider_stored wheat_stored bread_stored soup_stored chip_stored pie_stored pancake_stored milk_stored meal_stored
-        algae_stored syrup_stored fungus_stored burger_stored shake_stored beetle_stored bean_production_hour bean_stored
-        restrict_coverage cheese_production_hour cheese_stored
-    );
-    foreach my $attribute (@attributes) {
-        $self->$attribute(0);
+    for my $building (@{$self->building_cache}) {
+        $building->is_upgrading(0);
+        $building->update;
     }
     $self->alliance_id(undef);
     $self->_plans->delete;
@@ -310,6 +297,23 @@ sub sanitize {
         $self->orbit != 8 &&
         $self->zone ~~ ['1|1','1|-1','-1|1','-1|-1','0|0','0|1','1|0','-1|0','0|-1']) {
         $self->usable_as_starter_enabled(1);
+    }
+    my @attributes = qw( happiness_hour happiness waste_hour waste_stored waste_capacity
+        energy_hour energy_stored energy_capacity water_hour water_stored water_capacity ore_capacity
+        rutile_stored chromite_stored chalcopyrite_stored galena_stored gold_stored uraninite_stored bauxite_stored
+        goethite_stored halite_stored gypsum_stored trona_stored kerogen_stored methane_stored anthracite_stored
+        sulfur_stored zircon_stored monazite_stored fluorite_stored beryl_stored magnetite_stored 
+        food_capacity food_consumption_hour lapis_production_hour potato_production_hour apple_production_hour
+        root_production_hour corn_production_hour cider_production_hour wheat_production_hour bread_production_hour
+        soup_production_hour chip_production_hour pie_production_hour pancake_production_hour milk_production_hour
+        meal_production_hour algae_production_hour syrup_production_hour fungus_production_hour burger_production_hour
+        shake_production_hour beetle_production_hour lapis_stored potato_stored apple_stored root_stored corn_stored
+        cider_stored wheat_stored bread_stored soup_stored chip_stored pie_stored pancake_stored milk_stored meal_stored
+        algae_stored syrup_stored fungus_stored burger_stored shake_stored beetle_stored bean_production_hour bean_stored
+        restrict_coverage cheese_production_hour cheese_stored
+    );
+    foreach my $attribute (@attributes) {
+        $self->$attribute(0);
     }
     $self->update;
     return $self;
@@ -392,10 +396,14 @@ around get_status => sub {
             is_isolationist => $self->empire->is_isolationist,
         };
         if (defined $empire) {
-            if ($empire->id eq $self->empire_id or (
-                $self->isa('Lacuna::DB::Result::Map::Body::Planet::Station') &&
-                $empire->alliance_id && $self->empire->alliance_id == $empire->alliance_id )
-                ) {
+            if ($empire->id eq $self->empire_id or
+                (
+                 $self->isa('Lacuna::DB::Result::Map::Body::Planet::Station') &&
+                 $empire->alliance_id && $self->empire->alliance_id == $empire->alliance_id
+                ) or
+                # maybe current empire is a sitter for the empire that owns this body?
+                $empire->babies->search({id => $self->empire_id})->count
+               ) {
                 if ($self->needs_recalc) {
                     $self->tick; # in case what we just did is going to change our stats
                 }
@@ -432,7 +440,7 @@ around get_status => sub {
                         foreign_body_id     => $self->id,
                         direction           => 'out',
                         task                => 'Travelling',
-                        'body.empire_id'    => {'!=' => $self->empire_id},
+                        'body.empire_id'    => {'!=' => $empire->id},
                         'empire.alliance_id'  => $self->empire->alliance_id,
                     },{
                         join                => {body => 'empire'},
@@ -446,7 +454,7 @@ around get_status => sub {
                     foreign_body_id     => $self->id,
                     direction           => 'out',
                     task                => 'Travelling',
-                    'body.empire_id'    => $self->empire_id,
+                    'body.empire_id'    => $empire->id,
                 },{
                     join                => 'body',
                     order_by            => 'date_available',
@@ -459,7 +467,7 @@ around get_status => sub {
                     foreign_body_id     => $self->id,
                     direction           => 'out',
                     task                => 'Travelling',
-                    'body.empire_id'    => {'!=' => $self->empire_id},
+                    'body.empire_id'    => {'!=' => $empire->id},
                 },{
                     join                => {body => 'empire'},
                     order_by            => 'date_available',
@@ -618,6 +626,7 @@ has building_count => (
         is      => 'rw',
         lazy    => 1,
         builder => '_build_building_count',
+        clearer => 'clear_building_count',
         );
 
 sub _build_building_count {
@@ -1129,6 +1138,24 @@ sub found_colony {
         }
     }
 
+    # Initialize body
+    my @attributes = qw( happiness_hour happiness waste_hour waste_stored waste_capacity
+        energy_hour energy_stored energy_capacity water_hour water_stored water_capacity ore_capacity
+        rutile_stored chromite_stored chalcopyrite_stored galena_stored gold_stored uraninite_stored bauxite_stored
+        goethite_stored halite_stored gypsum_stored trona_stored kerogen_stored methane_stored anthracite_stored
+        sulfur_stored zircon_stored monazite_stored fluorite_stored beryl_stored magnetite_stored 
+        food_capacity food_consumption_hour lapis_production_hour potato_production_hour apple_production_hour
+        root_production_hour corn_production_hour cider_production_hour wheat_production_hour bread_production_hour
+        soup_production_hour chip_production_hour pie_production_hour pancake_production_hour milk_production_hour
+        meal_production_hour algae_production_hour syrup_production_hour fungus_production_hour burger_production_hour
+        shake_production_hour beetle_production_hour lapis_stored potato_stored apple_stored root_stored corn_stored
+        cider_stored wheat_stored bread_stored soup_stored chip_stored pie_stored pancake_stored milk_stored meal_stored
+        algae_stored syrup_stored fungus_stored burger_stored shake_stored beetle_stored bean_production_hour bean_stored
+        restrict_coverage cheese_production_hour cheese_stored
+    );
+    foreach my $attribute (@attributes) {
+        $self->$attribute(0);
+    }
     # add starting resources
     $self->needs_recalc(1);
     $self->tick;
@@ -1432,7 +1459,7 @@ sub recalc_stats {
     if ($self->isa('Lacuna::DB::Result::Map::Body::Planet::GasGiant')) {
         $max_plots = min($gas_giant_platforms, $max_plots);
     }
-    if ($self->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) {
+    elsif ($self->isa('Lacuna::DB::Result::Map::Body::Planet::Station')) {
         $max_plots = $stats{size} = $station_command * 3;
     }
     elsif ($self->isa('Lacuna::DB::Result::Map::Body::Planet')) {
@@ -2595,6 +2622,7 @@ sub add_happiness {
 
 sub spend_happiness {
     my ($self, $value) = @_;
+    $self->tick;
     my $new = $self->happiness - $value;
     my $empire = $self->empire;
     if ($empire and $new < 0) {

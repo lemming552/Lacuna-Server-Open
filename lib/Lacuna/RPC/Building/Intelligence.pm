@@ -16,8 +16,9 @@ sub model_class {
 
 sub view_spies {
     my ($self, $session_id, $building_id, $page_number) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     $page_number ||= 1;
     my @spies;
     my $body = $building->body;
@@ -45,7 +46,7 @@ sub view_spies {
     }
     my @assignments = Lacuna::DB::Result::Spies->assignments;
     return {
-        status                  => $self->format_status($empire, $body),
+        status                  => $self->format_status($session, $body),
         spies                   => \@spies,
         possible_assignments    => \@assignments,
         spy_count               => $spy_list->pager->total_entries,
@@ -55,8 +56,9 @@ sub view_spies {
 
 sub view_all_spies {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my @spies;
     my $body = $building->body;
     my %planets = ( $body->id => $body );
@@ -74,7 +76,7 @@ sub view_all_spies {
     }
     my @assignments = Lacuna::DB::Result::Spies->assignments;
     return {
-        status                  => $self->format_status($empire, $body),
+        status                  => $self->format_status($session, $body),
         spies                   => \@spies,
         possible_assignments    => \@assignments,
         spy_count               => scalar @spies,
@@ -85,8 +87,9 @@ sub view_all_spies {
 # This call is too intensive for server at this time. Disabled
 # sub view_empire_spies {
 #     my ($self, $session_id, $building_id) = @_;
-#     my $empire = $self->get_empire_by_session($session_id);
-#     my $building = $self->get_building($empire, $building_id);
+#    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+#    my $empire   = $session->current_empire;
+#    my $building = $session->current_building;
 #     my @spies;
 #     my $body = $building->body;
 #     my %planets = ( $body->id => $body );
@@ -104,7 +107,7 @@ sub view_all_spies {
 #     }
 #     my @assignments = Lacuna::DB::Result::Spies->assignments;
 #     return {
-#         status                  => $self->format_status($empire, $body),
+#         status                  => $self->format_status($session, $body),
 #         spies                   => \@spies,
 #         possible_assignments    => \@assignments,
 #         spy_count               => scalar @spies,
@@ -114,8 +117,9 @@ sub view_all_spies {
 
 sub subsidize_training {
     my ($self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($building->efficiency == 100) {
         confess [1010, "You can not subsidize spies when the Intelligence Ministry is in need of repair."];
     }
@@ -142,14 +146,15 @@ sub subsidize_training {
     }
     $building->finish_work->update;
 
-    return $self->view($empire, $building);
+    return $self->view($session, $building);
 }
 
 
 sub assign_spy {
     my ($self, $session_id, $building_id, $spy_id, $assignment) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($building->efficiency == 100) {
         confess [1010, "You can not communicate with your spy when the Intelligence Ministry is in need of repair."];
     }
@@ -159,8 +164,14 @@ sub assign_spy {
         confess [1002, "Spy not found."];
     }
     my $mission = $spy->assign($assignment);
+
+    # changing poliprop changes stats.
+    $building->body->discard_changes;
+    if ($building->body->needs_recalc) {
+        $building->body->tick;
+    }
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
         mission => $mission,
         spy     => $spy->get_status,
     };
@@ -168,8 +179,9 @@ sub assign_spy {
 
 sub burn_spy {
     my ($self, $session_id, $building_id, $spy_id, $assignment) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     my $spy = $building->get_spy($spy_id);
     unless (defined $spy) {
         confess [1002, "Spy not found."];
@@ -184,15 +196,18 @@ sub burn_spy {
         confess [1010, "You can't burn a spy that has been killed in action; he's dead, Jim."];
     }
     $spy->burn;
+    my $body = $building->body;
+    $body->discard_changes;
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $body),
     };
 }
 
 sub train_spy {
     my ($self, $session_id, $building_id, $quantity) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
     unless ($building->efficiency == 100) {
         confess [1010, "You can not train spies when the Intelligence Ministry is in need of repair."];
     }
@@ -226,7 +241,7 @@ sub train_spy {
         }
     }
     my $ret = {
-        status  => $self->format_status($empire, $body),
+        status  => $self->format_status($session, $body),
         trained => $trained,
         not_trained => $quantity - $trained,
         building                    => {
@@ -243,9 +258,10 @@ sub train_spy {
 
 around 'view' => sub {
     my ($orig, $self, $session_id, $building_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id, skip_offline => 1);
-    my $out = $orig->($self, $empire, $building);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id, skip_offline => 1 });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $out = $orig->($self, $session, $building);
     $out->{spies} = {
         maximum         => $building->max_spies,
         current         => $building->spy_count,
@@ -255,6 +271,84 @@ around 'view' => sub {
     return $out;
 };
 
+sub name_spies {
+    my ($self, $opts) = @_;
+    Lacuna::Verify->new(content=>\$opts->{prefix}, throws=>[1005, 'Invalid prefix for a spy.'])
+        ->not_empty
+        ->no_profanity
+        ->length_lt(28)
+        ->no_restricted_chars
+        if $opts->{prefix};
+    Lacuna::Verify->new(content=>\$opts->{suffix}, throws=>[1005, 'Invalid suffix for a spy.'])
+        ->not_empty
+        ->no_profanity
+        ->length_lt(28)
+        ->no_restricted_chars
+        if $opts->{suffix};
+
+    confess [1005, 'Prefix or suffix must be provided']
+        if !$opts->{prefix} && !$opts->{suffix};
+    confess [1005, 'Prefix length plus suffix length is too long.']
+        if (defined $opts->{prefix} && length $opts->{prefix} ? 1 + length $opts->{prefix} : 0) +
+           (defined $opts->{suffix} && length $opts->{suffix} ? 1 + length $opts->{suffix} : 0) +
+            2 > 30;
+
+    my $session = $self->get_session({session_id => $opts->{session_id}, building_id => $opts->{building_id} });
+    my $building = $session->current_building;
+
+    my @spies = $building->get_spies()->all;
+    my %spies;
+    my @dupes;
+
+    for my $spy (@spies)
+    {
+        if ($spies{$spy->name})
+        {
+            push @dupes, $spy;
+        }
+        else
+        {
+            $spies{$spy->name} = $spy;
+        }
+    }
+
+    # look for names not set properly.
+    my @names_left;
+    for my $n (1..@spies)
+    {
+        my $desired_name = sprintf("%s%s%02d%s%s",
+                                   $opts->{prefix} // '',
+                                   defined $opts->{prefix} && length $opts->{prefix} ? ' ' : '',
+                                   $n,
+                                   defined $opts->{suffix} && length $opts->{suffix} ? ' ' : '',
+                                   $opts->{suffix} // '',
+                                  );
+        if ($spies{$desired_name})
+        {
+            delete $spies{$desired_name};
+        }
+        else
+        {
+            push @names_left, $desired_name;
+        }
+    }
+
+    my $renamed = 0;
+    for my $spy (sort { $a->{id} <=> $b->{id} } @dupes, values %spies)
+    {
+        # Agent Null spies?
+        next if $opts->{rename_null_only} && $spy->name ne 'Agent Null';
+
+        $renamed++;
+        $spy->name(shift @names_left);
+        $spy->update;
+    }
+
+    my $rc = $self->view_all_spies($session, $building);
+    $rc->{renamed} = $renamed;
+    $rc;
+}
+
 sub name_spy {
     my ($self, $session_id, $building_id, $spy_id, $name) = @_;
     Lacuna::Verify->new(content=>\$name, throws=>[1005, 'Invalid name for a spy.'])
@@ -263,18 +357,26 @@ sub name_spy {
         ->length_lt(31)
         ->length_gt(2)
         ->no_restricted_chars;
-    my $empire = $self->get_empire_by_session($session_id);
-    my $building = $self->get_building($empire, $building_id);
-    my $spy = $building->get_spy($spy_id);
+    my $session  = $self->get_session({session_id => $session_id, building_id => $building_id });
+    my $empire   = $session->current_empire;
+    my $building = $session->current_building;
+    my $spy      = $building->get_spy($spy_id);
     $spy->name($name);
     $spy->update;
     return {
-        status  => $self->format_status($empire, $building->body),
+        status  => $self->format_status($session, $building->body),
     };
     
 }
 
-__PACKAGE__->register_rpc_method_names(qw(view_spies view_all_spies assign_spy train_spy burn_spy name_spy subsidize_training));
+__PACKAGE__->register_rpc_method_names(
+qw(view_spies
+view_all_spies
+assign_spy
+train_spy
+burn_spy
+name_spy name_spies
+subsidize_training));
 
 
 no Moose;

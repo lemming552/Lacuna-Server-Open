@@ -18,9 +18,10 @@ sub BUILD {
     my $session_data = Lacuna->cache->get_and_deserialize('session', $self->id);
     if (defined $session_data && ref $session_data eq 'HASH') {
         $self->api_key($session_data->{api_key});
+        $self->real_empire_id($session_data->{real_empire_id});
         $self->empire_id($session_data->{empire_id});
         $self->extended($session_data->{extended});
-        $self->is_sitter($session_data->{is_sitter});
+        $self->_is_sitter($session_data->{is_sitter});
         $self->is_from_admin($session_data->{is_from_admin});
         $self->ip_address($session_data->{ip_address});
     }
@@ -35,10 +36,16 @@ has api_key => (
     is          => 'rw',
 );
 
-has is_sitter => (
+has _is_sitter => (
     is          => 'rw',
     default     => 0,
 );
+
+sub is_sitter {
+    my ($self) = @_;
+    $self->_is_sitter or
+        $self->current_empire && $self->empire_id != $self->current_empire->id;
+}
 
 has is_from_admin => (
     is          => 'rw',
@@ -54,6 +61,10 @@ has empire_id => (
     },
 );
 
+has real_empire_id => (
+    is          => 'rw',
+);
+
 has ip_address => (
     is      => 'rw',
 );
@@ -66,13 +77,37 @@ has empire => (
     default     => sub {
         my $self = shift;
         return undef unless $self->has_empire_id;
-        my $empire = Lacuna->db->resultset('Lacuna::DB::Result::Empire')->find($self->empire_id);
+        my $empire = Lacuna->db->resultset('Empire')->find($self->empire_id);
         if (defined $empire) {
             $empire->current_session($self);
         }
         return $empire;
     },
 );
+
+# if we are targeting a specific building,
+# track it here.
+has current_building => (
+    is        => 'rw',
+    predicate => 'has_building',
+    clearer   => 'clear_building',
+    isa       => 'Maybe[Lacuna::DB::Result::Building]',
+);
+
+has current_body =>  (
+    is        => 'rw',
+    predicate => 'has_body',
+    clearer   => 'clear_body',
+    isa       => 'Maybe[Lacuna::DB::Result::Map::Body]',
+);
+
+has current_empire => (
+    is        => 'rw',
+    isa       => 'Maybe[Lacuna::DB::Result::Empire]',
+    default   => sub { shift->empire },
+);
+
+
 
 sub check_captcha {
     my $self = shift;
@@ -89,10 +124,11 @@ sub update {
         'session',
         $self->id,
         { 
+            real_empire_id  => $self->real_empire_id,
             empire_id       => $self->empire_id,
             api_key         => $self->api_key,
             extended        => $self->extended,
-            is_sitter       => $self->is_sitter,
+            is_sitter       => $self->_is_sitter,
             is_from_admin   => $self->is_from_admin,
             ip_address      => $self->ip_address,
         },
@@ -122,9 +158,10 @@ sub end {
 
 sub start {
     my ($self, $empire, $options) = @_;
+    $self->real_empire_id($empire->id) if !$options->{is_sitter};
     $self->empire_id($empire->id);
     $self->api_key($options->{api_key});
-    $self->is_sitter($options->{is_sitter});
+    $self->_is_sitter($options->{is_sitter});
     $self->is_from_admin($options->{is_from_admin});
     $empire->current_session($self);
     $self->empire($empire);
@@ -140,10 +177,15 @@ sub start {
         ip_address      => $ip,
         session_id      => $self->id,
         is_sitter       => $options->{is_sitter} ? 1 : 0,
+        browser_fingerprint => $options->{browser},
         # is_from_admin => $options->{is_from_admin} <-- probably not needed
     })->insert;
     return $self->extend;
 }
+
+# this is to double-ensure we don't rpc-count twice, so we don't want
+# this saved as part of the overall session in memcached.
+has rpc_counted => ( is => 'rw' );
 
 no Moose;
 __PACKAGE__->meta->make_immutable;

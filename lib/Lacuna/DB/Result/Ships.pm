@@ -286,9 +286,11 @@ sub type_human {
 }
 
 # allow each ship to change the image as we go.
+sub image_subdir { () }
+
 sub image {
     my $self = shift;
-    $self->type;
+    join '/', $self->image_subdir, $self->type;
 }
 
 sub date_started_formatted {
@@ -706,6 +708,7 @@ sub orbit {
     my ($self) = @_;
     $self->task('Orbiting');
     $self->date_available(DateTime->now);
+    $self->payload({});
     return $self;
 }
 

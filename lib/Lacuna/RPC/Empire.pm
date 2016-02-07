@@ -12,13 +12,21 @@ use Time::HiRes;
 use Text::CSV_XS;
 use Firebase::Auth;
 use Gravatar::URL;
+use List::Util qw(none);
+use PerlX::Maybe qw(provided);
+use Log::Any qw($log);
+use Data::Dumper;
+
+# logging features are new in this level.
+use JSON::RPC::Dispatcher 0.0508;
 
 sub find {
     my ($self, $session_id, $name) = @_;
     unless (length($name) >= 3) {
         confess [1009, 'Empire name too short. Your search must be at least 3 characters.'];
     }
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     my $empires = Lacuna->db->resultset('Empire')->search({name => {'like' => $name.'%'}}, {rows=>100});
     my @list_of_empires;
     my $limit = 100;
@@ -30,7 +38,7 @@ sub find {
         $limit--;
         last unless $limit;
     }
-    return { empires => \@list_of_empires, status => $self->format_status($empire) };
+    return { empires => \@list_of_empires, status => $self->format_status($session) };
 }
 
 sub is_name_available {
@@ -68,7 +76,7 @@ sub logout {
 }
 
 sub login {
-    my ($self, $plack_request, $name, $password, $api_key) = @_;
+    my ($self, $plack_request, $name, $password, $api_key, $browser) = @_;
     unless ($api_key) {
         confess [1002, 'You need an API Key.'];
     }
@@ -88,6 +96,7 @@ sub login {
     my %session_params = (
                           api_key => $api_key,
                           request => $plack_request,
+                          browser => $browser,
                          );
 
     if ($empire->is_password_valid($password)) {
@@ -139,9 +148,11 @@ sub login {
         )->create_token;
     }
 
+    my $session = $empire->start_session(\%session_params);
+
     return {
-        session_id  => $empire->start_session(\%session_params)->id,
-        status      => $self->format_status($empire),
+        session_id  => $session->id,
+        status      => $self->format_status($session),
     };
 
 }
@@ -171,7 +182,7 @@ sub benchmark {
     $out{validation} = Time::HiRes::tv_interval($t);
 
     $t = [Time::HiRes::gettimeofday];
-    $empire->start_session({ api_key => $api_key, request => $plack_request });
+    my $session = $empire->start_session({ api_key => $api_key, request => $plack_request });
     $out{session} = Time::HiRes::tv_interval($t);
 
     $t = [Time::HiRes::gettimeofday];
@@ -187,18 +198,42 @@ sub benchmark {
     $out{pcc} = Time::HiRes::tv_interval($t);
  
     $t = [Time::HiRes::gettimeofday];
-    $self->format_status($empire, $home);
+    $self->format_status($session, $home);
     $out{status} = Time::HiRes::tv_interval($t);
  
     return \%out;
 }
 
 
+# Each 'fetch' of a captcha will recover the most recent captcha from the database.
+# it will also trigger a job to create a new captcha (for the next person to make
+# a request).
+#
+
 sub fetch_captcha {
     my ($self, $plack_request) = @_;
+
+    $log->debug("fetch_captcha");
     my $ip = $plack_request->address;
-    my $captcha = Lacuna->db->resultset('Captcha')->find(randint(1,Lacuna->config->get('captcha/total')));
+    my ($captcha) = Lacuna->db->resultset('Captcha')->search(undef, { rows => 1, order_by => { -desc => 'id'} });
+
+    if (not defined $captcha) {
+        # then we have not (yet) created any captchas. Let's make a fake one
+        # but not put it in the database
+        $captcha = Lacuna->db->resultset('Captcha')->new({
+            riddle      => 'Answer 1',
+            solution    => 1,
+            guid        => 'dummy',
+        });
+    }
+
     Lacuna->cache->set('create_empire_captcha', $ip, { guid => $captcha->guid, solution => $captcha->solution }, 60 * 15 );
+
+    # Now trigger a new captcha generation
+
+    my $job = Lacuna->queue->publish('captcha');
+    $log->debug(Dumper($job));
+
     return {
         guid    => $captcha->guid,
         url     => $captcha->uri,
@@ -220,14 +255,15 @@ sub change_password {
         ->length_gt(5)
         ->eq($password2);
 
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     if ($empire->has_current_session && $empire->current_session->is_sitter) {
         confess [1015, 'Sitters cannot modify the main account password.'];
     }
     
     $empire->password($empire->encrypt_password($password1));
     $empire->update;
-    return { status => $self->format_status($empire) };
+    return { status => $self->format_status($session) };
 }
 
 
@@ -285,7 +321,8 @@ sub reset_password {
     $empire->update;
     
     # authenticate
-    return { session_id => $empire->start_session({ api_key => $api_key, request => $plack_request })->id, status => $self->format_status($empire) };
+    my $session = $empire->start_session({ api_key => $api_key, request => $plack_request });
+    return { session_id => $session->id, status => $self->format_status($session) };
 }
 
 sub create {
@@ -395,21 +432,24 @@ sub found {
     $empire->attach_invite_code($invite_code);
     
     my $welcome = $empire->found;
+    my $session = $empire->start_session({ api_key => $api_key, request => $plack_request });
     return {
-        session_id          => $empire->start_session({ api_key => $api_key, request => $plack_request })->id,
-        status              => $self->format_status($empire),
+        session_id          => $session->id,
+        status              => $self->format_status($session),
         welcome_message_id  => $welcome->id,
     };
 }
 
 sub get_status {
     my ($self, $session_id) = @_;
-    return $self->format_status($self->get_empire_by_session($session_id));
+    my $session  = $self->get_session({session_id => $session_id});
+    return $self->format_status($session);
 }
 
 sub view_profile {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     if ($empire->has_current_session && $empire->current_session->is_sitter) {
         confess [1015, 'Sitters cannot modify preferences.'];
     }
@@ -454,12 +494,13 @@ sub view_profile {
         skip_incoming_ships     => $empire->skip_incoming_ships,
     );
 
-    return { profile => \%out, status => $self->format_status($empire) };    
+    return { profile => \%out, status => $self->format_status($session) };    
 }
 
 sub edit_profile {
     my ($self, $session_id, $profile) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     
     # preferences
     if ($empire->has_current_session && $empire->current_session->is_sitter) {
@@ -666,15 +707,17 @@ sub set_status_message {
         ->not_empty
         ->no_restricted_chars
         ->no_profanity;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     $empire->status_message($message);
     $empire->update;
-    return $self->format_status($empire);
+    return $self->format_status($session);
 }
 
 sub view_public_profile {
     my ($self, $session_id, $empire_id) = @_;
-    my $viewer_empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $viewer_empire   = $session->current_empire;
     my $viewed_empire = Lacuna->db->resultset('Empire')->find($empire_id);
     unless (defined $viewed_empire) {
         confess [1002, 'The empire you wish to view does not exist.', $empire_id];
@@ -730,76 +773,83 @@ sub view_public_profile {
     }
     $out{known_colonies} = \@colonies;
 
-    return { profile => \%out, status => $self->format_status($viewer_empire) };
+    return { profile => \%out, status => $self->format_status($session) };
 }
 
 sub boost_ore {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'ore_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'ore_boost', $weeks);
 }
 
 sub boost_water {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'water_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'water_boost', $weeks);
 }
 
 sub boost_energy {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'energy_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'energy_boost', $weeks);
 }
 
 sub boost_food {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'food_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'food_boost', $weeks);
 }
 
 sub boost_happiness {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'happiness_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'happiness_boost', $weeks);
 }
 
 sub boost_storage {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'storage_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'storage_boost', $weeks);
 }
 
 sub boost_building {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'building_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'building_boost', $weeks);
 }
 
 sub boost_spy_training {
-    my ($self, $session_id) = @_;
-    return $self->boost($session_id, 'spy_training_boost');
+    my ($self, $session_id, $weeks) = @_;
+    return $self->boost($session_id, 'spy_training_boost', $weeks);
 }
 
 sub boost {
-    my ($self, $session_id, $type) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
-    unless ($empire->essentia >= 5) {
+    my ($self, $session_id, $type, $weeks) = @_;
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
+    $weeks //= 1;
+
+    confess [1001, "Weeks must be a positive integer"]
+        unless $weeks >=0 and int($weeks) == $weeks;
+
+    unless ($empire->essentia >= 5 * $weeks) {
         confess [1011, 'Not enough essentia.'];
     }
     $empire->spend_essentia({
-        amount  => 5, 
+        amount  => 5 * $weeks,
         reason  => $type.' boost',
     });
     my $start = DateTime->now;
     $start = $empire->$type if ($empire->$type > $start);
-    $start->add(days=>7);
+    $start->add(days=>7*$weeks);
     $empire->planets->update({needs_recalc=>1, boost_enabled=>1});
     $empire->$type($start);
     $empire->update;
     return {
-        status => $self->format_status($empire),
+        status => $self->format_status($session),
         $type => format_date($empire->$type),
     };
 }
 
 sub view_boosts {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     return {
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
         boosts  => {
             food         => format_date($empire->food_boost),
             happiness    => format_date($empire->happiness_boost),
@@ -815,43 +865,48 @@ sub view_boosts {
 
 sub enable_self_destruct {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     if ($empire->current_session->is_sitter) {
         confess [1015, 'Sitters cannot enable or disable self destruct.'];
     }
     $empire->enable_self_destruct;
-    return { status => $self->format_status($empire) };
+    return { status => $self->format_status($session) };
 }
 
 sub disable_self_destruct {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     if ($empire->current_session->is_sitter) {
         confess [1015, 'Sitters cannot enable or disable self destruct.'];
     }
     $empire->disable_self_destruct;
-    return { status => $self->format_status($empire) };
+    return { status => $self->format_status($session) };
 }
 
 sub redeem_essentia_code {
     my ($self, $session_id, $code) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     my $amount = $empire->redeem_essentia_code($code);
-    return { amount => $amount, status => $self->format_status($empire) };
+    return { amount => $amount, status => $self->format_status($session) };
 }
 
 sub get_invite_friend_url {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     return {
         referral_url    => $empire->get_invite_friend_url,
-        status          => $self->format_status($empire),
+        status          => $self->format_status($session),
     };
 }
 
 sub invite_friend {
     my ($self, $session_id, $addresses, $custom_message) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     unless ($empire->email) {
         confess [1010, 'You cannot invite friends because you have not set up your email address in your profile.'];
     }
@@ -876,7 +931,7 @@ sub invite_friend {
     else {
         confess [1009, 'Could not read the address(es) entered. Perhaps you formatted something incorrectly?', $addresses];
     }
-    return { status => $self->format_status($empire), sent => \@sent, not_sent => \@not_sent };
+    return { status => $self->format_status($session), sent => \@sent, not_sent => \@not_sent };
 }
 
 sub vet_species {
@@ -926,15 +981,17 @@ sub vet_species {
 
 sub redefine_species_limits {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     my $out = $empire->determine_species_limits($empire);
-    $out->{status} = $self->format_status($empire);
+    $out->{status} = $self->format_status($session);
     return $out;
 }
 
 sub redefine_species {
     my ($self, $session_id, $me) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
 
     unless ($empire->essentia >= 100) {
         confess [1011, 'You need at least 100 essentia to redefine your species.'];
@@ -965,7 +1022,7 @@ sub redefine_species {
     $empire->planets->update({needs_recalc=>1});
     
     return {
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
     };
 }
 
@@ -994,10 +1051,11 @@ sub update_species {
 
 sub view_species_stats {
     my ($self, $session_id) = @_;
-    my $empire = $self->get_empire_by_session($session_id);
+    my $session  = $self->get_session({session_id => $session_id});
+    my $empire   = $session->current_empire;
     return {
         species => $empire->get_species_stats,
-        status  => $self->format_status($empire),
+        status  => $self->format_status($session),
     };
 }
 
@@ -1126,14 +1184,188 @@ sub get_species_templates {
     ]
 }
 
+sub view_authorized_sitters
+{
+    my ($self, $session_id) = @_;
+    my $session = $self->get_session({session_id => $session_id});
+    my $baby = $session->current_empire();
+
+    my $rs = $baby->sitters()
+        ->search(
+                 { },
+                 {
+                     '+select' => [ 'me.expiry' ],
+                     '+as'     => [ 'expiry' ],
+                     order_by  => 'sitter.name',
+                 }
+                );
+
+    my $parser = Lacuna->db->storage->datetime_parser;
+
+    my @auths;
+    while (my $e = $rs->next)
+    {
+        push @auths, {
+            id     => $e->id,
+            name   => $e->name,
+            expiry => format_date($parser->parse_datetime($e->get_column('expiry'))),
+        };
+    }
+
+    return { status => $self->format_status($session->empire), sitters => \@auths };
+}
+
+sub authorize_sitters
+{
+    my ($self, $session_id, $opts) = @_;
+    my $session  = $self->get_session({session_id => $session_id});
+    $session->check_captcha;
+
+    my $baby = $session->current_empire;
+    my $baby_id = $session->empire_id;
+    my $rs = $baby->sitters;
+    my $auths = Lacuna->db->resultset('SitterAuths');
+
+    my @sitters;
+    if ($opts->{allied})
+    {
+        if ($baby->alliance_id)
+        {
+            push @sitters, $baby->alliance->members->get_column('id')->all;
+        }
+    }
+    if ($opts->{alliance})
+    {
+        my $alliance =
+            Lacuna->db->resultset('Alliance')->find({name => $opts->{alliance}});
+        if ($alliance)
+        {
+            push @sitters, $alliance->members->all;
+        }
+    }
+    if ($opts->{alliance_id})
+    {
+        my $alliance =
+            Lacuna->db->resultset('Alliance')->find({id => $opts->{alliance_id}});
+        if ($alliance)
+        {
+            push @sitters, $alliance->members->all;
+        }
+    }
+    if ($opts->{empires} and ref $opts->{empires} eq 'ARRAY')
+    {
+        push @sitters, @{$opts->{empires}};
+    }
+    if ($opts->{revalidate_all})
+    {
+        push @sitters, $rs->get_column('me.sitter_id')->all;
+    }
+    confess [1009, "No sitters selected"] unless @sitters;
+
+    my @bad_ids;
+    for my $sitter (@sitters)
+    {
+        my $sit = eval { ref $sitter && $sitter->isa('Lacuna::DB::Result::Empire') } ?
+            $sitter :
+            Lacuna->db->empire($sitter);
+        if ($sit)
+        {
+            my $sitter_id = $sit->id;
+            next if $sitter_id == $baby_id;
+
+            my $auth = $auths->find({baby_id => $baby_id, sitter_id => $sitter_id});
+            $auth  //= $auths->new({baby_id => $baby_id, sitter_id => $sitter_id});
+            $auth->reauthorise;
+            $auth->update_or_insert;
+        }
+        else
+        {
+            push @bad_ids, $sitter;
+        }
+    }
+
+    my $rc = $self->view_authorized_sitters($session);
+    $rc->{rejected_ids} = \@bad_ids;
+    return $rc;
+}
+
+sub deauthorize_sitters
+{
+    my ($self, $session_id, $opts) = @_;
+    my $session  = $self->get_session({session_id => $session_id});
+    my $baby = $session->current_empire;
+
+    my $baby_id = $session->empire_id;
+
+    confess [1009, "The 'empires' option must be an array of empire IDs"]
+        unless $opts->{empires} and ref $opts->{empires} eq 'ARRAY' and
+        none { /\D/ } @{$opts->{empires}};
+
+    my $dtf = Lacuna->db->storage->datetime_parser;
+    my $now = $dtf->format_datetime(DateTime->now);
+
+    # set expiry to immediate
+    my $rs = Lacuna->db->resultset('SitterAuths');
+    $rs->search({baby_id => $baby_id, sitter_id => { in => $opts->{empires} }})
+        ->update({expiry => $now});
+
+    return $self->view_authorized_sitters($session);
+}
+
+sub _rewrite_request_for_logging
+{
+    my ($method, $params) = @_;
+    if ($method eq 'login') {
+        $params->[1] = 'xxx';
+    }
+    elsif ($method eq 'change_password') {
+        $params->[$_] = 'xxx' for 0..2;
+    }
+    elsif ($method eq 'reset_password') {
+        $params->[$_] = 'xxx' for 1..2;
+    }
+    elsif ($method eq 'create') {
+        $params = {
+            @$params,
+            password => 'xxx',
+        };
+    }
+    elsif ($method eq 'edit_profile') {
+        $params->[1] = {
+            %{$params->[1]},
+            provided $params->[1]->{sitter_password}, sitter_password => 'xxx',
+        }
+    }
+    return $params;
+}
+
 __PACKAGE__->register_rpc_method_names(
-    { name => "create", options => { with_plack_request => 1 } },
+    { name => "create", options => { with_plack_request => 1, log_request_as => \&_rewrite_request_for_logging } },
     { name => "fetch_captcha", options => { with_plack_request => 1 } },
-    { name => "login", options => { with_plack_request => 1 } },
+    { name => "login", options => { with_plack_request => 1, log_request_as => \&_rewrite_request_for_logging } },
     { name => "benchmark", options => { with_plack_request => 1 } },
     { name => "found", options => { with_plack_request => 1 } },
-    { name => "reset_password", options => { with_plack_request => 1 } },
-    qw(redefine_species redefine_species_limits get_invite_friend_url get_species_templates update_species view_species_stats send_password_reset_message invite_friend redeem_essentia_code enable_self_destruct disable_self_destruct change_password set_status_message find view_profile edit_profile view_public_profile is_name_available logout get_full_status get_status boost_building boost_storage boost_water boost_energy boost_ore boost_food boost_happiness boost_spy_training view_boosts),
+    { name => "reset_password", options => { with_plack_request => 1, log_request_as => \&_rewrite_request_for_logging } },
+    { name => 'change_password', options => { log_request_as => \&_rewrite_request_for_logging } },
+    { name => 'edit_profile', options => { log_request_as => \&_rewrite_request_for_logging } },
+    qw(
+    redefine_species redefine_species_limits
+    get_invite_friend_url
+    get_species_templates update_species view_species_stats
+    send_password_reset_message
+    invite_friend
+    redeem_essentia_code
+    enable_self_destruct disable_self_destruct
+    set_status_message
+    find
+    view_profile view_public_profile
+    is_name_available
+    logout
+    get_full_status get_status
+    boost_building boost_storage boost_water boost_energy boost_ore
+    boost_food boost_happiness boost_spy_training view_boosts
+    view_authorized_sitters authorize_sitters deauthorize_sitters
+    ),
 );
 
 

@@ -143,7 +143,7 @@ sub www_view_essentia_log {
 sub www_view_login_log {
     my ($self, $request) = @_;
     my ( $search_field, $search_value );
-    for my $field (qw( empire_id ip_address api_key )) {
+    for my $field (qw( empire_id ip_address api_key browser_fingerprint )) {
         if ( my $value = $request->param($field) ) {
             $search_field = $field;
             $search_value = $value;
@@ -161,7 +161,7 @@ sub www_view_login_log {
     if ( $search_field eq 'empire_id' ) {
         $out .= sprintf('<a href="/admin/view/empire?id=%s">Back To Empire</a>', $search_value);
     }
-    $out .= '<table style="width: 100%;"><tr><th>ID</th><th>Empire Name</th><th>Log-in Date</th><th>Log-out Date</th><th>Extended</th><th>IP Address</th><th>Sitter</th><th>API Key</th></tr>';
+    $out .= '<table style="width: 100%;"><tr><th>ID</th><th>Empire Name</th><th>Log-in Date</th><th>Log-out Date</th><th>Extended</th><th>IP Address</th><th>Sitter</th><th>API Key</th><th>Browser ID</th></tr>';
     while (my $login = $logins->next) {
         my $sitter = $login->is_sitter ? 'Sitter' : '';
         $out .= sprintf('<tr><td><a href="/admin/view/empire?id=%d">%d</a></td>',
@@ -171,8 +171,11 @@ sub www_view_login_log {
         $out .= sprintf('<td><a href="/admin/view/login/log?ip_address=%s" title="Search for all users logging in with this IP address">%s</a></td>',
                         $login->ip_address, $login->ip_address );
         $out .= sprintf('<td>%s</td>', $sitter);
-        $out .= sprintf('<td><a href="/admin/view/login/log?api_key=%s" title="Search for all users logging in with this API key">%s</a></td></tr>',
+        $out .= sprintf('<td><a href="/admin/view/login/log?api_key=%s" title="Search for all users logging in with this API key">%s</a></td>',
                         $login->api_key, $login->api_key );
+        $out .= sprintf('<td><a href="/admin/view/login/log?browser_fingerprint=%s" title="Search for all users logging in with this browser fingerprint">%1$s</a></td>',
+                        $login->browser_fingerprint);
+        $out .= '</tr>';
     }
     $out .= '</table>';
     $out .= $self->format_paginator('view/login/log', $search_field, $search_value, $page_number);
@@ -306,34 +309,32 @@ use Encode;
 sub www_search_bodies {
     my ($self, $request) = @_;
     my $page_number = $request->param('page_number') || 1;
-    my $bodies = Lacuna->db->resultset('Lacuna::DB::Result::Map::Body')->search(undef, {order_by => ['name'], rows => 25, page => $page_number });
+    my $bodies = Lacuna->db->resultset('Lacuna::DB::Result::Map::Body')->search(undef, {order_by => ['me.name'], rows => 25, page => $page_number, prefetch=>[qw/empire star/] });
     my $name = decode_utf8($request->param('name') || '');
     my $pager = 'name';
-
-    printf "NAME: %s\n",$name;
 
     if ($name) {
         my $query = "$name%";
         $query =~ s/\*/%/g;
-        $bodies = $bodies->search({name => { like => $query }});
+        $bodies = $bodies->search({'me.name' => { like => $query }});
     }
     if ($request->param('empire_id')) {
         $pager = 'empire_id';
         $name  = $request->param('empire_id');
-        $bodies = $bodies->search({empire_id => $name});
+        $bodies = $bodies->search({'me.empire_id' => $name});
     }
     if ($request->param('zone')) {
-        $bodies = $bodies->search({zone => $request->param('zone')});
+        $bodies = $bodies->search({'me.zone' => $request->param('zone')});
     }
     if ($request->param('star_id')) {
-        $bodies = $bodies->search({star_id => $request->param('star_id')});
+        $bodies = $bodies->search({'me.star_id' => $request->param('star_id')});
     }
     my $out = '<h1>Search Bodies</h1>';
     $out .= '<form method="post" action="/admin/search/bodies"><input name="name" value="'.$name.'"><input type="submit" value="search"></form>';
-    $out .= '<table style="width: 100%;"><tr><th>Id</th><th>Name</th><th>X</th><th>Y</th><th>O</th><th>Zone</th><th>Star</th><th>Type</th><th>Happiness</th><th>Empire</th></tr>';
+    $out .= '<table style="width: 100%;"><tr><th>Id</th><th>Name</th><th>X</th><th>Y</th><th>Zone</th><th>Star</th><th>O</th><th>Type</th><th>Happiness</th><th>Empire</th></tr>';
     while (my $body = $bodies->next) {
-        $out .= sprintf('<tr><td><a href="/admin/view/body?id=%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><a href="/admin/view/empire?id=%s">%s</a></td></tr>',
-                        $body->id, $body->id, $body->name, $body->x, $body->y, $body->orbit, $body->zone, $body->star_id, $body->image_name, kmbtq($body->happiness),
+        $out .= sprintf('<tr><td><a href="/admin/view/body?id=%s">%s</a></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><a href="/admin/view/star?id=%d">%s (%d)</a></td><td>%s</td><td>%s</td><td>%s</td><td><a href="/admin/view/empire?id=%s">%s</a></td></tr>',
+                        $body->id, $body->id, $body->name, $body->x, $body->y, $body->zone, $body->star_id, $body->star->name,$body->star_id, $body->orbit, $body->image_name, kmbtq($body->happiness),
                         $body->empire_id || '', $body->empire_id ? sprintf("%s (%s)",$body->empire->name,$body->empire_id) : '' );
     }
     $out .= '</table>';
@@ -1127,7 +1128,7 @@ sub www_view_body {
     $out .= sprintf('<tr><th>X</th><td>%s</td><td></td></tr>', $body->x);
     $out .= sprintf('<tr><th>Y</th><td>%s</td><td></td></tr>', $body->y);
     $out .= sprintf('<tr><th>Orbit</th><td>%s</td><td></td></tr>', $body->orbit);
-    $out .= sprintf('<tr><th>Happiness</th><td>%s</td><td><form method="post" style="display: inline" action="/admin/add/happiness"><input type="hidden" name="id" value="%s"><input name="amount" style="width: 30px;" value="0"><input type="submit" value="add happiness"></form></td></tr>', $body->happiness, $body->id);
+    $out .= sprintf('<tr><th>Happiness</th><td>%s</td><td><form method="post" style="display: inline" action="/admin/add/happiness"><input type="hidden" name="id" value="%s"><input name="amount" style="width: 10em" value="0"><input type="submit" value="add happiness"></form></td></tr>', $body->happiness, $body->id);
     $out .= sprintf('<tr><th>Star</th><td><a href="/admin/view/star?id=%s">%s</a> (%s)</td><td><a href="/admin/search/bodies?star_id=%s">Bodies Orbiting This Star</a></td></tr>', $body->star_id, $body->star->name, $body->star_id, $body->star_id);
     if ($body->empire) {
         $out .= sprintf('<tr><th>Empire</th><td><a href="/admin/view/empire?id=%s">%s</a> (%s)</td><td></td></tr>', $body->empire_id, $body->empire->name, $body->empire_id);
@@ -1510,7 +1511,7 @@ sub www_view_economy {
 
     my $revenue_chart = 'http://chart.apis.google.com/chart?chxr=1,0,'.$max_revenue
         .'&chxt=x,y&chds=0,'.$max_revenue.',0,'.$max_revenue.',0,'.$max_revenue.',0,'.$max_revenue.',0,'.$max_revenue
-        .'&chdl=$3|$6|$10|$25|$50&chf=bg,s,014986&chxs=0,ffffff|1,ffffff&chls=3|3|3|3|3'
+        .'&chdl=$3+(30)|$6+(100)|$10+(200)|$25+(600)|$50+(1300)&chf=bg,s,014986&chxs=0,ffffff|1,ffffff&chls=3|3|3|3|3'
         .'&chxtc=1,-900&chs=900x300&cht=bvs&chco=00ff00,ffb400,b400ff,00b4ff,ff0000&chd=t:'
         .join('|',
             join(',', @r30),
@@ -1524,7 +1525,7 @@ sub www_view_economy {
 
     my $purchases_chart = 'http://chart.apis.google.com/chart?chxr=1,0,'.$max_purchases
         .'&chxt=x,y&chds=0,'.$max_purchases.',0,'.$max_purchases.',0,'.$max_purchases.',0,'.$max_purchases.',0,'.$max_purchases
-        .'&chdl=30|100|200|600|1300&chf=bg,s,014986&chxs=0,ffffff|1,ffffff&chls=3|3|3|3|3&chxtc=1,-900&chs=900x300&cht=bvs&chco=00ff00,ffb400,b400ff,00b4ff,ff0000&chd=t:'
+        .'&chdl=$3+(30)|$6+(100)|$10+(200)|$25+(600)|$50+(1300)&chf=bg,s,014986&chxs=0,ffffff|1,ffffff&chls=3|3|3|3|3&chxtc=1,-900&chs=900x300&cht=bvs&chco=00ff00,ffb400,b400ff,00b4ff,ff0000&chd=t:'
         .join('|',
             join(',', @p30),
             join(',', @p100),
