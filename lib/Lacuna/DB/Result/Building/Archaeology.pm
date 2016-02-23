@@ -72,8 +72,8 @@ sub get_ores_available_for_processing {
 sub max_excavators {
   my $self = shift;
   my $level = $self->effective_level;
-  return 0 if ($level < 11);
-  return ($level - 10);
+  return 0 if ($level < 16);
+  return (int(($level - 14)/2));
 }
 
 sub run_excavators {
@@ -86,7 +86,7 @@ sub run_excavators {
   my $result = $self->dig_it($self->body, $level, 1);
   $result->{id} = $self->id;
   push @{$results}, $result;
-  if ($level > 10) {
+  if ($level > 15) {
     my $excavators = $self->excavators;
     while (my $excav = $excavators->next) {
       my $body = $excav->body;
@@ -211,7 +211,7 @@ sub dig_it {
   given ($outcome) {
     when ("resource") {
       my $type = random_element([ORE_TYPES, FOOD_TYPES, qw(water energy)]);
-      my $amount = randint(10 * $level, 200 * $level);
+      my $amount = randint(15 * $level, 250 * $level);
       $self->body->add_type($type, $amount)->update;
       $result = {
         message => "Found $amount of $type.",
@@ -443,17 +443,17 @@ sub can_you_dig_it {
   my ($self, $body, $level, $arch) = @_;
 
   my $mult = $arch + 1;
-  my $plan  = int($level/4 + 1);
+  my $plan  = int($level/10 + 1);
   my $ore_total = 0;
   for my $ore (ORE_TYPES) {
      $ore_total += $body->$ore;
   }
-  $ore_total = 10_000 if $ore_total > 10_000;
-  my $glyph = int($mult * $level * $ore_total/20_000)+1; 
-  my $resource = int(5/2 * $level);
+  $ore_total = 15_000 if $ore_total > 15_000;
+  my $glyph = int($mult * $level * $ore_total/50_000)+1; 
+  my $resource = int(3 * $level);
   my $artifact = 0;
   if (!$arch && (scalar @{$body->building_cache})) {
-    $artifact = 15;
+    $artifact = 25;
   }
   my $destroy = $arch ? 0 : 5;
   $destroy += $artifact;

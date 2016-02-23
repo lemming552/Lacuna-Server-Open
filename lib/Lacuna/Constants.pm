@@ -3,9 +3,15 @@ package Lacuna::Constants;
 use strict;
 use base 'Exporter';
 
-use constant INFLATION => 1.75;
 use constant SECONDS_IN_A_DAY => 60 * 60 * 24;
-use constant GROWTH => 1.55;
+use constant GROWTH      => 1.55;
+use constant GROWTH_N    => 1.35; #Normal growth
+use constant GROWTH_S    => 1.15; #Slow Growth for Glyph Buildings
+use constant GROWTH_F    => 1.55; #Fast Growth for Tier II Buildings
+use constant INFLATION   => 1.75;
+use constant INFLATION_N => 1.75; #Normal Inflation
+use constant INFLATION_S => 1.55; #Slow Inflation
+use constant INFLATION_F => 1.95; #Fast Inflation
 use constant MINIMUM_EXERTABLE_INFLUENCE => 10;
 use constant FOOD_TYPES => (qw(cheese bean lapis potato apple root corn cider wheat bread soup chip pie pancake milk meal algae syrup fungus burger shake beetle));
 use constant ORE_TYPES => (qw(rutile chromite chalcopyrite galena gold uraninite bauxite goethite halite gypsum trona kerogen methane anthracite sulfur zircon monazite fluorite beryl magnetite));
@@ -133,8 +139,14 @@ use constant SHIP_SINGLE_USE_TYPES => (qw( probe short_range_colony_ship colony_
                                         ));
 our @EXPORT_OK = qw(
     INFLATION
+    INFLATION_N
+    INFLATION_S
+    INFLATION_F
     SECONDS_IN_A_DAY
     GROWTH
+    GROWTH_N
+    GROWTH_S
+    GROWTH_F
     MINIMUM_EXERTABLE_INFLUENCE
     FOOD_TYPES
     ORE_TYPES
@@ -149,8 +161,14 @@ our @EXPORT_OK = qw(
 our %EXPORT_TAGS = (
     all =>  [qw(
         INFLATION
+        INFLATION_N
+        INFLATION_S
+        INFLATION_F
         SECONDS_IN_A_DAY
         GROWTH
+        GROWTH_N
+        GROWTH_S
+        GROWTH_F
         MINIMUM_EXERTABLE_INFLUENCE
         FOOD_TYPES
         ORE_TYPES

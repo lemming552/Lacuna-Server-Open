@@ -5,6 +5,9 @@ use utf8;
 no warnings qw(uninitialized);
 extends 'Lacuna::DB::Result::Building';
 
+use GROWTH    => GROWTH_S;
+use INFLATION => INFLATION_F;
+
 sub sortable_name {
     '25'.shift->name
 }
